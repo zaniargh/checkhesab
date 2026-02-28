@@ -230,9 +230,14 @@ def parse_pdf(pdf_bytes: bytes) -> list[dict]:
     return rows_out
 
 def parse_html(html_bytes: bytes) -> list[dict]:
-    """Parse an HTML bank statement and extract transaction rows."""
-    # Bank HTML exports are typically Windows-1256 encoded
-    html_text = html_bytes.decode("windows-1256", errors="replace")
+    """Parse HTML statement into the standard dict format."""
+    
+    # Try decoding as standard UTF-8, fallback to cp1256 (Windows-1256) used by older Iranian accounting tools
+    try:
+        html_text = html_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        html_text = html_bytes.decode('cp1256', errors='replace')
+        
     soup = BeautifulSoup(html_text, "html.parser")
     rows_out = []
     seen_tx = set()
@@ -522,6 +527,10 @@ def parse_excel(excel_bytes: bytes, filename: str) -> list[dict]:
             m_eng = re.search(r"(\d{4,})[A-Za-z]", ref)
             last4 = m_eng.group(1) if m_eng else ref_digits
             
+            # Check for duplicate lock
+            raw_joined = " | ".join(str(r) for r in row if str(r).strip())
+            is_locked = "تطبیق شده" in raw_joined
+            
             txns.append({
                 "row_num":   ri + 1,
                 "ref":       ref,
@@ -531,7 +540,8 @@ def parse_excel(excel_bytes: bytes, filename: str) -> list[dict]:
                 "date":      date,
                 "desc":      desc,
                 "sender":    sndr,
-                "raw":       " | ".join(str(r) for r in row if str(r).strip()),
+                "raw":       raw_joined,
+                "is_locked": is_locked,
             })
     else:
         # Auto-detect: scan every row for big numbers
@@ -549,12 +559,16 @@ def parse_excel(excel_bytes: bytes, filename: str) -> list[dict]:
             # find Persian name
             sndr_m = re.search(r"[\u0600-\u06FF]{4,}(?:\s[\u0600-\u06FF]{3,})*", joined)
             sndr = sndr_m.group(0) if sndr_m else ""
+            
+            is_locked = "تطبیق شده" in joined
+            
             txns.append({
                 "row_num": ri + 1,
                 "ref": ref, "last4": ref[-4:] if len(ref) >= 4 else ref,
                 "amount": amt, "date": "", "desc": joined[:80],
                 "sender": sndr,
                 "raw": joined[:120],
+                "is_locked": is_locked,
             })
 
     logger.info(f"Excel transactions: {len(txns)}")
@@ -588,7 +602,8 @@ def match_receipts(
         r"|\bGPPC\b|\bDRPA\b|\bGPAC\b|\bIMPT\b|\bSPAC\b",
         re.IGNORECASE
     )
-    rows = [r for r in rows if BANK_KEYWORDS.search(r.get("desc", ""))]
+    # We want to keep rows that either have a banking keyword OR contain an isolated 4+ digit number in the description
+    rows = [r for r in rows if BANK_KEYWORDS.search(r.get("desc", "")) or re.search(r"\b\d{4,}\b", r.get("desc", ""))]
     logger.info(f"Banking-type PDF rows after filter: {len(rows)}")
 
     # Build bank lookup maps
@@ -646,41 +661,56 @@ def match_receipts(
                     
                 for scode in search_codes:
                     cands = by_last4.get(scode, [])
-                    if len(cands) == 1:
-                        matched, method, status = cands[0], f"کد: {scode}", "exact"
-                        break
-                    elif len(cands) > 1 and amount:
-                        # Disambiguate by amount (10% tolerance)
-                        m = next((c for c in cands if c.get("amount") and abs(c["amount"] - amount) < amount * 0.10), None)
-                        if m:
-                            matched, method, status = m, f"کد {scode} + مبلغ", "exact"
+                    if cands:
+                        # Find the best candidate. Prioritize locked candidates so duplicates are correctly flagged even if another unlocked row exists
+                        if len(cands) == 1:
+                            matched, method, status = cands[0], f"کد: {scode}", "exact"
                         else:
-                            matched, method, status = cands[0], f"کد {scode} (چندگانه)", "exact"
+                            # Disambiguate by amount (10% tolerance)
+                            amount_cands = [c for c in cands if c.get("amount") and amount and abs(c["amount"] - amount) < amount * 0.10]
+                            working_cands = amount_cands if amount_cands else cands
+                            
+                            # If there is a locked candidate among valid options, choose it so we flag duplicate
+                            locked_cand = next((c for c in working_cands if c.get("is_locked")), None)
+                            if locked_cand:
+                                matched, method, status = locked_cand, f"کد {scode} + مبلغ (تکراری)", "exact"
+                            else:
+                                matched, method, status = working_cands[0], f"کد {scode} (چندگانه)", "exact"
                         break
                 
                 if matched:
                     break
 
         # ── 2. Match by sender name AND amount (Needs Manual Review) ──
-        if not matched and use_name and sender and amount:
+        # ONLY IF the PDF receipt actually had a tracking code (user requirement: don't match receipts without codes)
+        if not matched and use_name and sender and amount and codes:
             skey = nrm(sender)
             cands = by_sender.get(skey, [])
             if cands:
-                # Find the one that matches amount strictly
-                m = next((c for c in cands if c.get("amount") and abs(c["amount"] - amount) < amount * 0.05), None)
-                if m:
-                    matched, method, status = m, f"نام مشابه + مبلغ یکسان", "review"
+                # Find the ones that match amount strictly
+                amount_cands = [c for c in cands if c.get("amount") and abs(c["amount"] - amount) < amount * 0.05]
+                if amount_cands:
+                    locked_cand = next((c for c in amount_cands if c.get("is_locked")), None)
+                    matched = locked_cand if locked_cand else amount_cands[0]
+                    method, status = f"نام مشابه + مبلغ یکسان", "review"
 
             # Partial name match
             if not matched and len(skey) >= 3:
                 for k, txs in by_sender.items():
                     if len(k) >= 3 and (k in skey or skey in k):
-                        m = next((c for c in txs if c.get("amount") and abs(c["amount"] - amount) < amount * 0.05), None)
-                        if m:
-                            matched, method, status = m, f"نام جزئی مشابه + مبلغ یکسان", "review"
+                        amount_cands = [c for c in txs if c.get("amount") and abs(c["amount"] - amount) < amount * 0.05]
+                        if amount_cands:
+                            locked_cand = next((c for c in amount_cands if c.get("is_locked")), None)
+                            matched = locked_cand if locked_cand else amount_cands[0]
+                            method, status = f"نام جزئی مشابه + مبلغ یکسان", "review"
                             break
 
         # ── 3. (Removed pure amount fallback to prevent false positives) ──
+        
+        # ── 4. Override status if this matched row is already locked ──
+        if matched and matched.get("is_locked"):
+            status = "duplicate"
+            method = "تکراری (قبلاً تطبیق شده)"
 
         results.append({
             "idx":          len(results) + 1,
@@ -748,16 +778,82 @@ async def analyze(
         use_amount   = use_amount.lower()   == "true",
     )
 
-    exact = sum(1 for r in results if r["status"] == "exact")
-    review = sum(1 for r in results if r["status"] == "review")
-    not_found = len(results) - exact - review
+    # ── Excel Locking Generation ──
+    try:
+        import pandas as pd
+        import openpyxl
+        from openpyxl.styles import PatternFill
+        import io
+        import os
 
+        # Get 1-based row numbers from matched results
+        matched_rows = set(r["bank_row"] for r in results if r["status"] in ("exact", "review") and r.get("bank_row"))
+        
+        # Also include previously locked rows from the bank txns so they don't lose their color
+        # because pandas rebuilds the file without preserving original formatting.
+        for t in bank_txns:
+            if t.get("is_locked") and t.get("row_num"):
+                # +1 because pandas to_excel without header/index makes 0-indexed rows 1-indexed in openpyxl,
+                # but tx['row_num'] is already aligned to openpyxl 1-based indexing in parse_excel
+                matched_rows.add(t["row_num"])
+
+        if matched_rows:
+            # 1. Read raw bytes with Pandas and convert to standard XLSX in memory
+            # (We do this because python excel styling libs struggle with old formatting bounds)
+            df = pd.read_excel(io.BytesIO(excel_bytes), header=None)
+            
+            # Write to a temporary bytes buffer as .xlsx
+            xlsx_buffer = io.BytesIO()
+            df.to_excel(xlsx_buffer, index=False, header=False)
+            xlsx_buffer.seek(0)
+
+            # 2. Open with openpyxl to apply colors
+            wb = openpyxl.load_workbook(xlsx_buffer)
+            ws = wb.active
+            ws.sheet_view.rightToLeft = True
+            yellow_fill = PatternFill(start_color="FFFFFF00", end_color="FFFFFF00", fill_type="solid")
+
+            # Pandas drops the 1-based indexing, so row N in pandas is row N in openpyxl
+            for r_idx in matched_rows:
+                # Append the locked string to the last column (e.g. column 15) to make it stateful
+                ws.cell(row=r_idx, column=15, value="تطبیق شده") 
+                # Color the row yellow
+                for col in range(1, 16):
+                    ws.cell(row=r_idx, column=col).fill = yellow_fill
+
+            # 3. Save finalized colored workbook back to disk, replacing original if possible
+            # Determine path (assuming script is running locally next to files)
+            original_filename = excel_file.filename
+            if not original_filename:
+                original_filename = "bank.xls"
+                
+            # If the original was .xls, we save as .xlsx
+            base_name, _ = os.path.splitext(original_filename)
+            new_filename = f"{base_name}.xlsx"
+            
+            # Since the user runs this locally on Windows, save it to the checkhesab directory
+            # Or ideally, same directory where they uploaded from if we knew it.
+            # Assuming D:/Checkhesab/ is the working directory based on context.
+            save_path = f"d:/Checkhesab/{new_filename}"
+            wb.save(save_path)
+            
+            logger.info(f"Generated locked Excel with {len(matched_rows)} rows highlighted at {save_path}.")
+    except Exception as e:
+        logger.error(f"Failed to generate locked excel: {e}")
+
+    found_count = sum(1 for r in results if r["status"] == "exact")
+    review_count= sum(1 for r in results if r["status"] == "review")
+    dupl_count  = sum(1 for r in results if r["status"] == "duplicate")
+    
+    # We map 'found' technically as exact matches, 'review' as review
+    # The frontend uses status to categorize the UI boxes
     return JSONResponse({
         "ok":         True,
         "total":      len(results),
-        "found":      exact,
-        "review":     review,
-        "not_found":  not_found,
+        "found":      found_count,
+        "review":     review_count,
+        "duplicate":  dupl_count,
+        "not_found":  len(results) - found_count - review_count - dupl_count,
         "bank_total": len(bank_txns),
         "pdf_total":  len(pdf_rows),
         "results":    results,

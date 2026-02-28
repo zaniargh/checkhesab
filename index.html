@@ -307,6 +307,13 @@
       -webkit-text-fill-color: transparent;
     }
 
+    .stat-card.purple .num {
+      background: linear-gradient(135deg, #9333ea, #c084fc);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
     .stat-card .lbl {
       font-size: .82rem;
       color: var(--text2);
@@ -606,6 +613,10 @@
           <div class="num" id="s-review">0</div>
           <div class="lbl">نیاز به بررسی (فقط نام) ⚠️</div>
         </div>
+        <div class="stat-card purple">
+          <div class="num" id="s-duplicate">0</div>
+          <div class="lbl">تکراری (قبلاً استفاده شده) ⛔</div>
+        </div>
         <div class="stat-card red">
           <div class="num" id="s-notfound">0</div>
           <div class="lbl">پیدا نشده در بانک ❌</div>
@@ -624,6 +635,7 @@
           <button class="active" onclick="setFilter('all',this)">همه</button>
           <button onclick="setFilter('found',this)">قطعی با کد ✅</button>
           <button onclick="setFilter('review',this)">نیاز به بررسی دستی ⚠️</button>
+          <button onclick="setFilter('duplicate',this)">تکراری ⛔</button>
           <button onclick="setFilter('notfound',this)">پیدا نشده ❌</button>
         </div>
       </div>
@@ -753,6 +765,7 @@
         document.getElementById('s-total').textContent = results.length;
         document.getElementById('s-found').textContent = data.found;
         document.getElementById('s-review').textContent = data.review;
+        document.getElementById('s-duplicate').textContent = data.duplicate || 0;
         document.getElementById('s-notfound').textContent = data.not_found;
         document.getElementById('s-bank').textContent = data.bank_total;
 
@@ -775,7 +788,7 @@
       tbody.innerHTML = '';
       results.forEach((r, i) => {
         const tr = document.createElement('tr');
-        tr.dataset.status = (r.status === 'exact') ? 'found' : (r.status === 'review') ? 'review' : 'notfound';
+        tr.dataset.status = (r.status === 'exact') ? 'found' : (r.status === 'review') ? 'review' : (r.status === 'duplicate') ? 'duplicate' : 'notfound';
         const typeTag = r.doc_type === 'بستانکار'
           ? `<span class="col-type col-credit">↑ بستانکار</span>`
           : r.doc_type === 'بدهکار' ? `<span class="col-type col-debit">↓ بدهکار</span>` : `<span class="col-type">—</span>`;
@@ -783,6 +796,7 @@
         let statusBadge = '';
         if (r.status === 'exact') statusBadge = `<span class="status-badge found" style="background:rgba(34,197,94,.1);color:#16a34a;border:1px solid rgba(34,197,94,.2)">✅ پیدا شد (۱۰۰٪)</span>`;
         else if (r.status === 'review') statusBadge = `<span class="status-badge" style="color:#d97706;background:rgba(217,119,6,.12);border:1px solid rgba(217,119,6,.25);">⚠️ بررسی دستی</span>`;
+        else if (r.status === 'duplicate') statusBadge = `<span class="status-badge" style="color:#9333ea;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.25);">⛔ تکراری در سیستم</span>`;
         else statusBadge = `<span class="status-badge notfound" style="background:rgba(220,38,38,.08);color:#dc2626;border:1px solid rgba(220,38,38,.2)">❌ پیدا نشد</span>`;
 
         const matched = (r.status === 'exact' || r.status === 'review') ? `<div class="match-type" style="margin-top:4px">${r.match_method}</div>` : '';
@@ -828,8 +842,8 @@
     <p>تاریخ: ${new Date().toLocaleDateString('fa-IR')}</p>
     <table><thead><tr><th>#</th><th>تاریخ</th><th>نوع</th><th>مبلغ</th><th>کد ۴ رقمی</th><th>نام</th><th>وضعیت</th><th>روش</th></tr></thead><tbody>
     ${allResults.map((r, i) => {
-        let stColor = r.status === 'exact' ? 'green' : r.status === 'review' ? 'orange' : 'red';
-        let stText = r.status === 'exact' ? '✅ پیدا شد' : r.status === 'review' ? '⚠️ نیاز به بررسی' : '❌ پیدا نشد';
+        let stColor = r.status === 'exact' ? 'green' : r.status === 'review' ? 'orange' : r.status === 'duplicate' ? 'purple' : 'red';
+        let stText = r.status === 'exact' ? '✅ پیدا شد' : r.status === 'review' ? '⚠️ نیاز به بررسی' : r.status === 'duplicate' ? '⛔ حساب‌شده (تکراری)' : '❌ پیدا نشد';
         return `<tr><td>${r.idx || i + 1}</td><td>${r.date || ''}</td><td>${r.doc_type || ''}</td>
     <td>${r.amount ? Number(r.amount).toLocaleString() : ''}</td>
     <td>${r.codes || ''}</td><td>${r.sender || ''}</td>
@@ -844,7 +858,7 @@
     function exportCSV() {
       const hdr = ['ردیف', 'تاریخ', 'شماره سند', 'نوع', 'مبلغ', 'کد ۴ رقمی', 'نام/شرح', 'وضعیت', 'روش تطبیق'];
       const data = allResults.map((r, i) => {
-        const stText = r.status === 'exact' ? 'پیدا شد' : r.status === 'review' ? 'نیاز به بررسی دستی (نام)' : 'پیدا نشد';
+        const stText = r.status === 'exact' ? 'پیدا شد' : r.status === 'review' ? 'نیاز به بررسی دستی (نام)' : r.status === 'duplicate' ? 'تکراری حساب شده در فایل اکسل' : 'پیدا نشد';
         return [
           r.idx || i + 1, r.date || '', r.doc_num || '', r.doc_type || '', r.amount || '', r.codes || '', r.sender || '',
           stText, r.match_method || ''
