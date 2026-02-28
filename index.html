@@ -379,12 +379,12 @@
 
     thead th {
       background: var(--bg3);
-      padding: 13px 14px;
+      padding: 9px 10px;
       text-align: right;
-      font-weight: 600;
-      color: var(--text2);
-      font-size: .8rem;
-      border-bottom: 1px solid var(--border);
+      font-weight: 700;
+      color: var(--text);
+      font-size: .85rem;
+      border-bottom: 2px solid var(--border);
       white-space: nowrap;
     }
 
@@ -402,8 +402,9 @@
     }
 
     tbody td {
-      padding: 12px 14px;
+      padding: 8px 10px;
       vertical-align: middle;
+      font-size: .85rem;
     }
 
     .status-badge {
@@ -418,15 +419,15 @@
     }
 
     .status-badge.found {
-      background: rgba(22, 163, 74, .1);
-      color: #16a34a;
-      border: 1px solid rgba(22, 163, 74, .2);
+      background: rgba(22, 163, 74, .15);
+      color: #15803d;
+      border: 1px solid rgba(22, 163, 74, .3);
     }
 
     .status-badge.notfound {
-      background: rgba(220, 38, 38, .1);
-      color: #dc2626;
-      border: 1px solid rgba(220, 38, 38, .2);
+      background: rgba(220, 38, 38, .12);
+      color: #b91c1c;
+      border: 1px solid rgba(220, 38, 38, .3);
     }
 
     .match-type {
@@ -437,8 +438,9 @@
 
     .amount {
       font-family: monospace;
-      font-weight: 600;
-      color: #5b21b6;
+      font-weight: 700;
+      color: #4c1d95;
+      font-size: .9rem;
     }
 
     .tracking {
@@ -582,6 +584,15 @@
         فقط بستانکار مالی (واریز)
       </label>
       <div class="sep"></div>
+      <label title="تعیین نوع تراکنش بانکی در فایل اکسل. مهم برای جلوگیری از مچ شدن اشتباه واریزی با برداشتی">
+        <select id="opt-tx-type"
+          style="padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); font-family: inherit; font-size: 0.85rem; background: var(--bg);">
+          <option value="all">نوع تراکنش: همه موارد (پیش‌فرض)</option>
+          <option value="deposit">نوع تراکنش: فقط واریزی‌ها (بستانکار)</option>
+          <option value="withdrawal">نوع تراکنش: فقط برداشتی‌ها (بدهکار)</option>
+        </select>
+      </label>
+      <div class="sep"></div>
       <label title="تطبیق کمکی با مبلغ">
         <input type="checkbox" id="opt-amount" checked />
         تطبیق با مبلغ (کمکی)
@@ -720,6 +731,7 @@
       const useName = document.getElementById('opt-name').checked;
       const useAmount = document.getElementById('opt-amount').checked;
       const creditOnly = document.getElementById('opt-credit-only').checked;
+      const txTypeFilter = document.getElementById('opt-tx-type').value;
 
       const formData = new FormData();
       formData.append('pdf_file', pdfFile);
@@ -730,6 +742,7 @@
       formData.append('use_name', String(useName));
       formData.append('use_amount', String(useAmount));
       formData.append('credit_only', String(creditOnly));
+      formData.append('tx_type_filter', txTypeFilter);
 
       try {
         const response = await fetch('/analyze', {
@@ -794,10 +807,10 @@
           : r.doc_type === 'بدهکار' ? `<span class="col-type col-debit">↓ بدهکار</span>` : `<span class="col-type">—</span>`;
 
         let statusBadge = '';
-        if (r.status === 'exact') statusBadge = `<span class="status-badge found" style="background:rgba(34,197,94,.1);color:#16a34a;border:1px solid rgba(34,197,94,.2)">✅ پیدا شد (۱۰۰٪)</span>`;
-        else if (r.status === 'review') statusBadge = `<span class="status-badge" style="color:#d97706;background:rgba(217,119,6,.12);border:1px solid rgba(217,119,6,.25);">⚠️ بررسی دستی</span>`;
-        else if (r.status === 'duplicate') statusBadge = `<span class="status-badge" style="color:#9333ea;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.25);">⛔ تکراری در سیستم</span>`;
-        else statusBadge = `<span class="status-badge notfound" style="background:rgba(220,38,38,.08);color:#dc2626;border:1px solid rgba(220,38,38,.2)">❌ پیدا نشد</span>`;
+        if (r.status === 'exact') statusBadge = `<span class="status-badge found" style="background:rgba(21,128,61,.1);color:#15803d;border:1px solid rgba(21,128,61,.25)">✅ پیدا شد (۱۰۰٪)</span>`;
+        else if (r.status === 'review') statusBadge = `<span class="status-badge" style="color:#b45309;background:rgba(180,83,9,.12);border:1px solid rgba(180,83,9,.25);">⚠️ بررسی دستی</span>`;
+        else if (r.status === 'duplicate') statusBadge = `<span class="status-badge" style="color:#7e22ce;background:rgba(126,34,206,.1);border:1px solid rgba(126,34,206,.25);">⛔ تکراری در سیستم</span>`;
+        else statusBadge = `<span class="status-badge notfound" style="background:rgba(185,28,28,.08);color:#b91c1c;border:1px solid rgba(185,28,28,.25)">❌ پیدا نشد</span>`;
 
         const matched = (r.status === 'exact' || r.status === 'review') ? `<div class="match-type" style="margin-top:4px">${r.match_method}</div>` : '';
         const excelRow = (r.status === 'exact' || r.status === 'review') && r.bank_row ? `ردیف ${r.bank_row}` : '—';
@@ -808,7 +821,7 @@
       <td class="tracking">${r.doc_num || '—'}</td>
       <td>${typeTag}</td>
       <td class="amount">${fmtAmt(r.amount)}</td>
-      <td class="tracking" style="color:#fbbf24">${r.codes || '—'}</td>
+      <td class="tracking" style="color:#b45309; font-weight: 600;">${r.codes || '—'}</td>
       <td style="font-size:.8rem;max-width:200px">${r.sender || r.desc || '—'}</td>
       <td>${statusBadge}${matched}</td>
       <td style="font-size:.85rem;font-weight:600;color:var(--text);text-align:center">${excelRow}</td>

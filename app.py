@@ -444,7 +444,9 @@ def parse_excel(excel_bytes: bytes, filename: str) -> list[dict]:
     # Find header row
     header_kw = {
         "ref":    re.compile(r"مرجع|پیگیری|reference|شناسه|ارجاع|trace|شماره\s*سند", re.I),
-        "amount": re.compile(r"مبلغ|amount|credit|بستانکار|واریز", re.I),
+        "credit": re.compile(r"بستانکار|واریز|credit|دریافتی", re.I),
+        "debit":  re.compile(r"بدهکار|برداشت|debit|پرداختی", re.I),
+        "amount": re.compile(r"مبلغ|amount", re.I),
         "date":   re.compile(r"تاریخ|date", re.I),
         "desc":   re.compile(r"شرح|توضیح|description|بابت|نوع", re.I),
         "sender": re.compile(r"نام|واریزکننده|صاحب|sender", re.I),
@@ -461,7 +463,11 @@ def parse_excel(excel_bytes: bytes, filename: str) -> list[dict]:
         for ci, cell in enumerate(row):
             c = str(cell).strip()
             # Melli specific columns
-            if re.search(r"واریز|amount|credit|بستانکار", c, re.I) and "amount" not in tmp:
+            if re.search(r"بستانکار|واریز|credit|دریافتی", c, re.I) and "credit" not in tmp:
+                tmp["credit"] = ci; hits += 1
+            elif re.search(r"بدهکار|برداشت|debit|پرداختی", c, re.I) and "debit" not in tmp:
+                tmp["debit"] = ci; hits += 1
+            elif re.search(r"مبلغ|amount", c, re.I) and "amount" not in tmp:
                 tmp["amount"] = ci; hits += 1
             elif re.search(r"تاریخ|date", c, re.I) and "date" not in tmp:
                 tmp["date"] = ci; hits += 1
@@ -495,8 +501,29 @@ def parse_excel(excel_bytes: bytes, filename: str) -> list[dict]:
             else:
                 sndr = desc
             
-            amt_raw = g("amount")
-            amt = to_num(amt_raw)
+            amt = 0
+            tx_type = "unknown"
+            
+            # Determine credit/debit
+            credit_amt = to_num(g("credit")) or 0 if "credit" in col_map else 0
+            debit_amt = to_num(g("debit")) or 0 if "debit" in col_map else 0
+            general_amt = to_num(g("amount")) or 0 if "amount" in col_map else 0
+            amt_raw = g("amount") or g("credit") or g("debit")
+            
+            
+            if credit_amt > 0:
+                amt = credit_amt
+                tx_type = "deposit"
+            elif debit_amt > 0:
+                amt = debit_amt
+                tx_type = "withdrawal"
+            elif general_amt > 0:
+                amt = general_amt
+                # Guess based on description if it's a general amount column
+                if re.search(r"واریز|بستانکار|دریافت|اعتبار", desc):
+                    tx_type = "deposit"
+                elif re.search(r"برداشت|بدهکار|پرداخت|خرید", desc):
+                    tx_type = "withdrawal"
             
             if not ref and not amt and not date:
                 continue
@@ -529,7 +556,13 @@ def parse_excel(excel_bytes: bytes, filename: str) -> list[dict]:
             
             # Check for duplicate lock
             raw_joined = " | ".join(str(r) for r in row if str(r).strip())
-            is_locked = "تطبیق شده" in raw_joined
+            is_locked = False
+            lock_text = ""
+            for cell in row:
+                if "تطبیق شده" in str(cell):
+                    is_locked = True
+                    lock_text = str(cell).strip()
+                    break
             
             txns.append({
                 "row_num":   ri + 1,
@@ -537,11 +570,13 @@ def parse_excel(excel_bytes: bytes, filename: str) -> list[dict]:
                 "last4":     last4,
                 "all_codes": sorted(bank_codes),   # list, not set — JSON serializable
                 "amount":    amt,
+                "tx_type":   tx_type,
                 "date":      date,
                 "desc":      desc,
                 "sender":    sndr,
                 "raw":       raw_joined,
                 "is_locked": is_locked,
+                "lock_text": lock_text,
             })
     else:
         # Auto-detect: scan every row for big numbers
@@ -560,15 +595,27 @@ def parse_excel(excel_bytes: bytes, filename: str) -> list[dict]:
             sndr_m = re.search(r"[\u0600-\u06FF]{4,}(?:\s[\u0600-\u06FF]{3,})*", joined)
             sndr = sndr_m.group(0) if sndr_m else ""
             
-            is_locked = "تطبیق شده" in joined
+            is_locked = False
+            lock_text = ""
+            for cell in row:
+                if "تطبیق شده" in str(cell):
+                    is_locked = True
+                    lock_text = str(cell).strip()
+                    break
+            
+            tx_type = "unknown"
+            if re.search(r"واریز|بستانکار|دریافت", joined_n): tx_type = "deposit"
+            elif re.search(r"برداشت|بدهکار|پرداخت", joined_n): tx_type = "withdrawal"
             
             txns.append({
                 "row_num": ri + 1,
                 "ref": ref, "last4": ref[-4:] if len(ref) >= 4 else ref,
-                "amount": amt, "date": "", "desc": joined[:80],
+                "all_codes": [ref] if ref else [],
+                "amount": amt, "tx_type": tx_type, "date": "", "desc": joined[:80],
                 "sender": sndr,
                 "raw": joined[:120],
                 "is_locked": is_locked,
+                "lock_text": lock_text,
             })
 
     logger.info(f"Excel transactions: {len(txns)}")
@@ -585,6 +632,7 @@ def match_receipts(
     use_tracking: bool = True,
     use_name: bool = True,
     use_amount: bool = True,
+    tx_type_filter: str = "all",
 ) -> list[dict]:
     """Match PDF receipt rows against bank transactions."""
 
@@ -612,6 +660,10 @@ def match_receipts(
     by_sender: dict[str, list] = {}
 
     for tx in bank_txns:
+        # Filter by transaction type if specified
+        if tx_type_filter != "all" and tx.get("tx_type") != "unknown" and tx.get("tx_type") != tx_type_filter:
+            continue
+            
         # Index ALL possible codes from this bank row
         all_codes = set(tx.get("all_codes", []))
         if tx.get("last4"):
@@ -748,6 +800,7 @@ async def analyze(
     use_tracking:str        = Form("true"),
     use_name:    str        = Form("true"),
     use_amount:  str        = Form("true"),
+    tx_type_filter: str     = Form("all"),
 ):
     pdf_bytes   = await pdf_file.read()
     excel_bytes = await excel_file.read()
@@ -772,10 +825,11 @@ async def analyze(
 
     results = match_receipts(
         pdf_rows, bank_txns,
-        credit_only  = credit_only.lower() == "true",
-        use_tracking = use_tracking.lower() == "true",
-        use_name     = use_name.lower()     == "true",
-        use_amount   = use_amount.lower()   == "true",
+        credit_only    = credit_only.lower() == "true",
+        use_tracking   = use_tracking.lower() == "true",
+        use_name       = use_name.lower()     == "true",
+        use_amount     = use_amount.lower()   == "true",
+        tx_type_filter = tx_type_filter.lower(),
     )
 
     # ── Excel Locking Generation ──
@@ -787,7 +841,11 @@ async def analyze(
         import os
 
         # Get 1-based row numbers from matched results
-        matched_rows = set(r["bank_row"] for r in results if r["status"] in ("exact", "review") and r.get("bank_row"))
+        new_matched_rows = set(r["bank_row"] for r in results if r["status"] in ("exact", "review") and r.get("bank_row"))
+        all_matched_rows = set(new_matched_rows)
+        
+        # Keep track of old lock texts to preserve them
+        old_locks = {}
         
         # Also include previously locked rows from the bank txns so they don't lose their color
         # because pandas rebuilds the file without preserving original formatting.
@@ -795,9 +853,11 @@ async def analyze(
             if t.get("is_locked") and t.get("row_num"):
                 # +1 because pandas to_excel without header/index makes 0-indexed rows 1-indexed in openpyxl,
                 # but tx['row_num'] is already aligned to openpyxl 1-based indexing in parse_excel
-                matched_rows.add(t["row_num"])
+                all_matched_rows.add(t["row_num"])
+                if t.get("lock_text"):
+                    old_locks[t["row_num"]] = t["lock_text"]
 
-        if matched_rows:
+        if all_matched_rows:
             # 1. Read raw bytes with Pandas and convert to standard XLSX in memory
             # (We do this because python excel styling libs struggle with old formatting bounds)
             df = pd.read_excel(io.BytesIO(excel_bytes), header=None)
@@ -814,9 +874,15 @@ async def analyze(
             yellow_fill = PatternFill(start_color="FFFFFF00", end_color="FFFFFF00", fill_type="solid")
 
             # Pandas drops the 1-based indexing, so row N in pandas is row N in openpyxl
-            for r_idx in matched_rows:
+            
+            pdf_base_name = Path(pdf_file.filename or "ناشناس").stem
+            new_lock_msg = f"تطبیق شده - {pdf_base_name}"
+            
+            for r_idx in all_matched_rows:
                 # Append the locked string to the last column (e.g. column 15) to make it stateful
-                ws.cell(row=r_idx, column=15, value="تطبیق شده") 
+                msg = old_locks.get(r_idx, new_lock_msg)
+                
+                ws.cell(row=r_idx, column=15, value=msg) 
                 # Color the row yellow
                 for col in range(1, 16):
                     ws.cell(row=r_idx, column=col).fill = yellow_fill
