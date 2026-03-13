@@ -249,30 +249,51 @@ def parse_html(html_bytes: bytes) -> list[dict]:
     
     tables = soup.find_all("table")
     for table in tables:
-        headers = table.find_all(["th", "td"])
-        for i, h in enumerate(headers):
-            text = h.get_text(strip=True)
-            if "شرح" in text: desc_idx = i
-            elif "بستانکار" in text: credit_idx = i
-            elif "بدهکار" in text: debit_idx = i
-            elif "تاریخ" in text: date_idx = i
-            
-        # If we found at least desc and credit in this table, process its rows
-        if desc_idx != -1 and credit_idx != -1:
-            trs = table.find_all("tr")
-            for tr in trs:
+        rows_all = table.find_all("tr")
+        if not rows_all:
+            continue
+        
+        # Detect column indices from the FIRST header row (not flattened)
+        header_cells = rows_all[0].find_all(["th", "td"])
+        desc_idx = credit_idx = debit_idx = date_idx = -1
+        for ci, cell in enumerate(header_cells):
+            text = cell.get_text(strip=True)
+            if "شرح" in text:
+                desc_idx = ci
+            elif "بستانکار" in text and "مالي" in text:
+                credit_idx = ci
+            elif "بدهکار" in text and "مالي" in text:
+                debit_idx = ci
+            elif "تاریخ" in text or "تاريخ" in text:
+                date_idx = ci
+        
+        # Fallbacks if بستانکار مالي / بدهکار مالي not matched
+        if credit_idx == -1 or debit_idx == -1:
+            for ci, cell in enumerate(header_cells):
+                text = cell.get_text(strip=True)
+                if "بستانکار" in text and credit_idx == -1:
+                    credit_idx = ci
+                elif "بدهکار" in text and debit_idx == -1:
+                    debit_idx = ci
+
+        # If we found at least credit in this table, process its rows
+        if credit_idx != -1:
+            for tr in rows_all[1:]:  # Skip header row
                 tds = tr.find_all("td")
-                if len(tds) <= max(desc_idx, credit_idx):
+                if not tds or len(tds) <= credit_idx:
                     continue
-                    
-                desc = " | ".join(td.get_text(strip=True) for td in tds if td.get_text(strip=True))
-                # Ignore header rows that got caught as td
+
+                desc_parts = [td.get_text(strip=True) for td in tds if td.get_text(strip=True)]
+                desc = " | ".join(desc_parts)
+                # Ignore header rows caught as td
                 if "شرح" in desc or "ردیف" in desc or not desc:
                     continue
-                    
+
                 credit_raw = tds[credit_idx].get_text(strip=True)
-                debit_raw = tds[debit_idx].get_text(strip=True) if debit_idx != -1 and len(tds) > debit_idx else "0"
-                date_str = tds[date_idx].get_text(strip=True) if date_idx != -1 and len(tds) > date_idx else ""
+                debit_raw  = tds[debit_idx].get_text(strip=True)  if debit_idx != -1 and len(tds) > debit_idx  else "0"
+                date_str   = tds[date_idx].get_text(strip=True)   if date_idx  != -1 and len(tds) > date_idx   else ""
+                # Normalize date: remove leading day-letter prefix (like 'د ', 'ش ', etc.)
+                date_str = re.sub(r'^[آابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی]\s+', '', date_str).strip()
                 
                 credit = to_num(credit_raw) or 0
                 debit = to_num(debit_raw) or 0
@@ -475,6 +496,10 @@ def parse_excel(excel_bytes: bytes, filename: str) -> list[dict]:
                 tmp["desc"] = ci; hits += 1
             elif re.search(r"شماره\s*سند|مرجع|پیگیری|reference|شناسه|ارجاع|trace", c, re.I) and "ref" not in tmp:
                 tmp["ref"] = ci; hits += 1
+            elif re.search(r"اطلاعات\s*اضافی", c, re.I) and "extra_info" not in tmp:
+                tmp["extra_info"] = ci
+            elif re.search(r"فیش.*حواله|حواله.*فیش", c, re.I) and "fish" not in tmp:
+                tmp["fish"] = ci
                 
         if hits >= 3:
             header_idx = ri; col_map = tmp
@@ -491,6 +516,16 @@ def parse_excel(excel_bytes: bytes, filename: str) -> list[dict]:
             ref  = g("ref")
             date = g("date")
             desc = g("desc")
+            extra_info = g("extra_info")
+            fish_info = g("fish")
+            
+            # Combine Saderat extra info columns
+            if extra_info and extra_info.lower() != "nan":
+                desc = f"{desc} | {extra_info}"
+            if fish_info and fish_info.lower() != "nan":
+                desc = f"{desc} | {fish_info}"
+            
+            desc = desc.strip(" | ")
             
             # Extract sender from description for Melli bank statements
             # Typically something like "-0412060171037205-ملي-حسن-زارع  نريماني"
@@ -549,6 +584,26 @@ def parse_excel(excel_bytes: bytes, filename: str) -> list[dict]:
             for m_desc in re.finditer(r"\b(\d{4,8})\b", desc_n):
                 if m_desc.group(1) != str(amt_raw).translate(FA_DIGITS):
                     bank_codes.add(m_desc.group(1))
+                    
+            # (4) Scan the entire row for hidden long tracking codes (10+ digits)
+            # Some bank exports place the tracking code in unmapped columns (e.g. col 18)
+            row_joined = " | ".join(str(c) for c in row if pd.notna(c) and str(c).strip())
+            row_n = row_joined.translate(FA_DIGITS)
+            for m_long in re.finditer(r"\b(\d{10,30})\b", row_n):
+                val = m_long.group(1)
+                if val != str(amt_raw).translate(FA_DIGITS):
+                    bank_codes.add(val)
+            
+            # (5) Also extract the digit-only portion of IBAN strings (IR + digits)
+            # e.g. "IR570130100000000394773883" → "570130100000000394773883"
+            for m_iban in re.finditer(r"\bIR(\d{22,26})\b", row_joined, re.IGNORECASE):
+                iban_digits = m_iban.group(1)
+                bank_codes.add(iban_digits)
+                # Also add last 5 and last 4 for short-code matching
+                if len(iban_digits) > 5:
+                    bank_codes.add(iban_digits[-5:])
+                if len(iban_digits) > 4:
+                    bank_codes.add(iban_digits[-4:])
             
             # Primary reference number
             m_eng = re.search(r"(\d{4,})[A-Za-z]", ref)
@@ -633,31 +688,48 @@ def match_receipts(
     use_name: bool = True,
     use_amount: bool = True,
     tx_type_filter: str = "all",
+    use_date: bool = False,
 ) -> list[dict]:
     """Match PDF receipt rows against bank transactions."""
 
-    # Filter PDF rows
-    rows = [r for r in pdf_rows if not credit_only or (r.get("credit") and r["credit"] > 0)]
+    # Filter PDF rows — always include rows that have tracking codes even if credit_only is on.
+    # A debit row with a tracking code is still a verifiable receipt.
+    rows = [r for r in pdf_rows if
+            (not credit_only or (r.get("credit") and r["credit"] > 0))
+            or r.get("codes")]  # Always include rows that have tracking codes
 
-    # ── Only keep banking transaction rows ──
-    # Banking rows have: bank account prefix, bank keywords, or bracket references
-    # Exclude: pure purchase/sale rows (e.g. "حسن زاده NAME[COMPANY] AMOUNT")
-    BANK_KEYWORDS = re.compile(
-        r"واریز|برداشت|خروج|بانک|حواله|آبشده|انتقال|متفرقه|پایا|ساتنا|شبا|اینترنت"
-        r"|دستور|دریافت|پرداخت|نقد|فیش|رمزدار|چک|صادرات|اي.ران زمین"
-        r"|چ\s+\d{10}|پ\s+\d{10}|ش\s+\d{10}|س\s+\d{10}|د\s+\d{10}|ي\s+\d{10}"
-        r"|\[\s*(?:صادرات|ملي|ملت|تجارت|سامان|پارسيان|پاسارگاد|رسالت|قرض|اي.ران)"
-        r"|\bGPPC\b|\bDRPA\b|\bGPAC\b|\bIMPT\b|\bSPAC\b",
-        re.IGNORECASE
-    )
-    # We want to keep rows that either have a banking keyword OR contain an isolated 4+ digit number in the description
-    rows = [r for r in rows if BANK_KEYWORDS.search(r.get("desc", "")) or re.search(r"\b\d{4,}\b", r.get("desc", ""))]
-    logger.info(f"Banking-type PDF rows after filter: {len(rows)}")
+    # ── 1. Strict Rule: Only keep banking-related document types ──
+    # Exclude gold trading (خرید طلا, فروش طلا, etc.) entirely.
+    # Only keep money transfers: ورود وجه نقد, خروج وجه نقد, واریز به حساب, برداشت از حساب, etc.
+    VALID_DOC_TYPES = re.compile(r"ورود وجه نقد|خروج وجه نقد|واریز|برداشت|حواله|انتقال|ساتنا|پایا|نقد|فیش|چک", re.IGNORECASE)
+    
+    banking_rows = []
+    for r in rows:
+        # Check if the description contains a valid banking document type
+        if VALID_DOC_TYPES.search(r.get("desc", "")):
+            banking_rows.append(r)
+            
+    logger.info(f"Rows after filtering for valid banking types: {len(banking_rows)}")
+
+    # ── 2. Strict Rule: Only keep rows that actually have a tracking code ──
+    # The user specifically requested that ONLY rows with a 4-digit, 5-digit,
+    # or 6-digit tracking code should be checked in Excel.
+    valid_rows = []
+    for r in banking_rows:
+        valid_codes = [c for c in r.get("codes", []) if len(c) >= 4]
+        if valid_codes:
+            r["codes"] = valid_codes  # Filter out noise codes < 4 chars
+            valid_rows.append(r)
+            
+    rows = valid_rows
+
+    logger.info(f"PDF/HTML rows with valid tracking codes: {len(rows)}")
 
     # Build bank lookup maps
     by_last4: dict[str, list] = {}
     by_amount: dict[str, list] = {}
     by_sender: dict[str, list] = {}
+    iban_code_keys: set = set()  # (code, row_num) pairs that came from IBAN strings
 
     for tx in bank_txns:
         # Filter by transaction type if specified
@@ -669,12 +741,29 @@ def match_receipts(
         if tx.get("last4"):
             all_codes.add(tx["last4"])
             
+        seen_keys: set = set()
         for code in all_codes:
             if code:
-                by_last4.setdefault(code, []).append(tx)
-                # Also index the last 4 digits of any longer code for fallback
-                if len(code) > 4:
-                    by_last4.setdefault(code[-4:], []).append(tx)
+                # Detect if this code was derived from an IBAN (IR...) — already flagged in all_codes
+                # We mark it by checking if the original all_codes list contained IBAN-derived ones
+                # (parse_excel adds last4/last5 of IBAN digits to all_codes directly)
+                for key in [code] + ([code[-5:]] if len(code) > 5 else []) + ([code[-4:]] if len(code) > 4 else []):
+                    if key and (key, tx.get("row_num")) not in seen_keys:
+                        by_last4.setdefault(key, []).append(tx)
+                        seen_keys.add((key, tx.get("row_num")))
+        
+        # Track which codes came from IBANs (codes that are exactly 4 or 5 chars and appear as
+        # suffix of a 22+ digit number which itself starts with a country-code prefix)
+        # We stored these in all_codes — we can detect them by checking if any 22+ digit code
+        # has these as suffix
+        for c in all_codes:
+            if len(c) >= 22:
+                sfx4 = c[-4:] if len(c) >= 4 else ""
+                sfx5 = c[-5:] if len(c) >= 5 else ""
+                if sfx4:
+                    iban_code_keys.add((sfx4, tx.get("row_num")))
+                if sfx5:
+                    iban_code_keys.add((sfx5, tx.get("row_num")))
         if tx.get("amount"):
             k = str(int(tx["amount"]))
             by_amount.setdefault(k, []).append(tx)
@@ -700,34 +789,67 @@ def match_receipts(
         status  = "not_found" # "exact", "review", "not_found"
         method  = ""
 
-        # ── 1. Match by tracking code (Full or Last 4) ──
+        # ── 1. Match by tracking code + amount (both are REQUIRED) ──
+        # The user requirement: 4/5 digit code from HTML must match last 4/5 digits of the
+        # Excel tracking code, AND the amount must also match (within 5% tolerance).
+        # Sender name match is a bonus that increases confidence.
         if use_tracking:
             for code in codes:
                 if len(code) < 4:
                     continue
                 
-                # Try exact match first, then 4-digit fallback
+                # Build search codes: try the full code first, then last-5, then last-4
                 search_codes = [code]
+                if len(code) > 5:
+                    search_codes.append(code[-5:])
                 if len(code) > 4:
                     search_codes.append(code[-4:])
                     
                 for scode in search_codes:
                     cands = by_last4.get(scode, [])
-                    if cands:
-                        # Find the best candidate. Prioritize locked candidates so duplicates are correctly flagged even if another unlocked row exists
-                        if len(cands) == 1:
-                            matched, method, status = cands[0], f"کد: {scode}", "exact"
+                    if not cands:
+                        continue
+                    
+                    # REQUIRED: amount must also match (within 5% tolerance)
+                    if amount:
+                        amount_cands = [c for c in cands if c.get("amount") and abs(c["amount"] - amount) < amount * 0.05]
+                    else:
+                        amount_cands = []
+                    
+                    # If no amount match was found, skip this code - we require both
+                    if not amount_cands:
+                        continue
+                    
+                    # BONUS: also check sender name for disambiguation / confidence boost
+                    sender_key = nrm(sender)
+                    if sender_key and len(sender_key) >= 3:
+                        name_cands = [c for c in amount_cands 
+                                     if sender_key in nrm(c.get("sender", "")) 
+                                     or nrm(c.get("sender", "")) in sender_key]
+                    else:
+                        name_cands = []
+                    
+                    # Pick the best candidates (name matches first, then any amount match)
+                    working_cands = name_cands if name_cands else amount_cands
+                    
+                    if len(working_cands) > 1:
+                        # Multiple equally valid rows — flag as ambiguous
+                        matched = working_cands[0]
+                        method = f"کد {scode} + مبلغ (چند مورد مشابه)"
+                        status = "multiple"
+                        matched["all_matched_rows"] = [c.get("row_num") for c in working_cands if c.get("row_num")]
+                    elif len(working_cands) == 1:
+                        locked_cand = working_cands[0] if working_cands[0].get("is_locked") else None
+                        # Check if this match came via an IBAN suffix
+                        is_iban_match = (scode, working_cands[0].get("row_num")) in iban_code_keys
+                        iban_note = " (با شماره شبا منطبق است)" if is_iban_match else ""
+                        if locked_cand:
+                            matched, method, status = locked_cand, f"کد {scode} + مبلغ{iban_note} (تکراری)", "exact"
                         else:
-                            # Disambiguate by amount (10% tolerance)
-                            amount_cands = [c for c in cands if c.get("amount") and amount and abs(c["amount"] - amount) < amount * 0.10]
-                            working_cands = amount_cands if amount_cands else cands
-                            
-                            # If there is a locked candidate among valid options, choose it so we flag duplicate
-                            locked_cand = next((c for c in working_cands if c.get("is_locked")), None)
-                            if locked_cand:
-                                matched, method, status = locked_cand, f"کد {scode} + مبلغ (تکراری)", "exact"
-                            else:
-                                matched, method, status = working_cands[0], f"کد {scode} (چندگانه)", "exact"
+                            name_bonus = " + نام" if name_cands else ""
+                            matched, method, status = working_cands[0], f"کد {scode} + مبلغ{name_bonus}{iban_note}", "exact"
+                    
+                    if matched:
                         break
                 
                 if matched:
@@ -757,12 +879,29 @@ def match_receipts(
                             method, status = f"نام جزئی مشابه + مبلغ یکسان", "review"
                             break
 
-        # ── 3. (Removed pure amount fallback to prevent false positives) ──
+        # ── 3. Removed: Smart amount-only match ──
+        # The user requested that we NEVER match purely by amount if tracking code is missing.
         
         # ── 4. Override status if this matched row is already locked ──
-        if matched and matched.get("is_locked"):
+        if status != "multiple" and matched and matched.get("is_locked"):
+            # Check if locked by a DIFFERENT file
+            # lock_text is usually like "تطبیق شده - filename"
+            lock_text = matched.get("lock_text", "")
+            
+            # We want to identify if it's from another file:
             status = "duplicate"
             method = "تکراری (قبلاً تطبیق شده)"
+            if lock_text:
+                method = f"تکراری ({lock_text})"
+                # Also store the existing lock text to pass to front-end
+                matched["duplicate_lock_text"] = lock_text
+                
+        # ── 5. Setup bank_rows array for multiple matches ──
+        bank_rows_list = []
+        if status == "multiple" and matched and "all_matched_rows" in matched:
+             bank_rows_list = matched["all_matched_rows"]
+        elif matched and matched.get("row_num"):
+             bank_rows_list = [matched.get("row_num")]
 
         results.append({
             "idx":          len(results) + 1,
@@ -779,6 +918,9 @@ def match_receipts(
             "bank_ref":     matched.get("ref", "") if matched else "",
             "bank_date":    matched.get("date", "") if matched else "",
             "bank_row":     matched.get("row_num", "") if matched else "",
+            "bank_rows":    bank_rows_list,
+            "bank_sender":  matched.get("sender", "") if matched else "",
+            "duplicate_lock_text": matched.get("duplicate_lock_text", "") if matched else "",
         })
 
     return results
@@ -801,6 +943,7 @@ async def analyze(
     use_name:    str        = Form("true"),
     use_amount:  str        = Form("true"),
     tx_type_filter: str     = Form("all"),
+    use_date:    str        = Form("false"),
 ):
     pdf_bytes   = await pdf_file.read()
     excel_bytes = await excel_file.read()
@@ -830,6 +973,7 @@ async def analyze(
         use_name       = use_name.lower()     == "true",
         use_amount     = use_amount.lower()   == "true",
         tx_type_filter = tx_type_filter.lower(),
+        use_date       = use_date.lower()     == "true",
     )
 
     # ── Excel Locking Generation ──
@@ -841,8 +985,21 @@ async def analyze(
         import os
 
         # Get 1-based row numbers from matched results
-        new_matched_rows = set(r["bank_row"] for r in results if r["status"] in ("exact", "review") and r.get("bank_row"))
+        new_matched_rows = set()
+        multiple_matched_rows = set()
+        
+        for r in results:
+            if r["status"] in ("exact", "review", "duplicate"):
+                if r.get("bank_row"):
+                    new_matched_rows.add(r["bank_row"])
+            elif r["status"] == "multiple":
+                if r.get("bank_rows"):
+                    for b_row in r["bank_rows"]:
+                        multiple_matched_rows.add(b_row)
+
         all_matched_rows = set(new_matched_rows)
+        # Add multiple matched rows to the all set so we can color them
+        all_matched_rows.update(multiple_matched_rows)
         
         # Keep track of old lock texts to preserve them
         old_locks = {}
@@ -878,14 +1035,26 @@ async def analyze(
             pdf_base_name = Path(pdf_file.filename or "ناشناس").stem
             new_lock_msg = f"تطبیق شده - {pdf_base_name}"
             
+            # Define violet/purple color for multiple (ambiguous) matches
+            pink_fill = PatternFill(start_color="FFDDA0DD", end_color="FFDDA0DD", fill_type="solid")
+            
             for r_idx in all_matched_rows:
-                # Append the locked string to the last column (e.g. column 15) to make it stateful
-                msg = old_locks.get(r_idx, new_lock_msg)
+                # If it's a multiple match, color it pink, otherwise yellow
+                current_fill = pink_fill if r_idx in multiple_matched_rows else yellow_fill
+                
+                # Check for existing lock to append "و"
+                existing = old_locks.get(r_idx, "")
+                if existing and "تطبیق شده" in existing and pdf_base_name not in existing:
+                    # Append the new file if it's already locked by another file
+                    msg = f"{existing} و {pdf_base_name}"
+                else:
+                    msg = existing if existing else new_lock_msg
                 
                 ws.cell(row=r_idx, column=15, value=msg) 
-                # Color the row yellow
+                
+                # Color the row
                 for col in range(1, 16):
-                    ws.cell(row=r_idx, column=col).fill = yellow_fill
+                    ws.cell(row=r_idx, column=col).fill = current_fill
 
             # 3. Save finalized colored workbook back to disk, replacing original if possible
             # Determine path (assuming script is running locally next to files)
@@ -910,6 +1079,7 @@ async def analyze(
     found_count = sum(1 for r in results if r["status"] == "exact")
     review_count= sum(1 for r in results if r["status"] == "review")
     dupl_count  = sum(1 for r in results if r["status"] == "duplicate")
+    mult_count  = sum(1 for r in results if r["status"] == "multiple")
     
     # We map 'found' technically as exact matches, 'review' as review
     # The frontend uses status to categorize the UI boxes
@@ -919,7 +1089,8 @@ async def analyze(
         "found":      found_count,
         "review":     review_count,
         "duplicate":  dupl_count,
-        "not_found":  len(results) - found_count - review_count - dupl_count,
+        "multiple":   mult_count,
+        "not_found":  len(results) - found_count - review_count - dupl_count - mult_count,
         "bank_total": len(bank_txns),
         "pdf_total":  len(pdf_rows),
         "results":    results,
@@ -934,8 +1105,10 @@ async def health():
     return {"ok": True}
 
 if __name__ == "__main__":
+    import sys, io
+    if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     print("\n" + "="*60)
-    print("  سیستم تطبیق فیش‌های بانکی")
-    print("  آدرس: http://localhost:8765")
+    print("  Receipt Checker - http://localhost:8765")
     print("="*60 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=8765, log_level="info")

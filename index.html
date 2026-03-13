@@ -429,6 +429,18 @@
       color: #b91c1c;
       border: 1px solid rgba(220, 38, 38, .3);
     }
+    
+    .status-badge.duplicate {
+      background: rgba(234, 179, 8, .15); /* Yellow for duplicate */
+      color: #a16207;
+      border: 1px solid rgba(234, 179, 8, .3);
+    }
+    
+    .status-badge.multiple {
+      background: rgba(236, 72, 153, .15); /* Pink for multiple matches */
+      color: #be185d;
+      border: 1px solid rgba(236, 72, 153, .3);
+    }
 
     .match-type {
       font-size: .74rem;
@@ -597,6 +609,11 @@
         <input type="checkbox" id="opt-amount" checked />
         تطبیق با مبلغ (کمکی)
       </label>
+      <div class="sep"></div>
+      <label title="بررسی تطابق تاریخ سند با تاریخ تراکنش بانکی — در برخی موارد تاریخ ثبت سند با تاریخ بانک متفاوت است">
+        <input type="checkbox" id="opt-date" />
+        بررسی تطابق تاریخ
+      </label>
     </div>
 
     <div class="error-box" id="error-box"></div>
@@ -628,6 +645,10 @@
           <div class="num" id="s-duplicate">0</div>
           <div class="lbl">تکراری (قبلاً استفاده شده) ⛔</div>
         </div>
+        <div class="stat-card purple">
+          <div class="num" id="s-multiple">0</div>
+          <div class="lbl">کد و مبلغ مشابه در اکسل (چندگانه) 🌸</div>
+        </div>
         <div class="stat-card red">
           <div class="num" id="s-notfound">0</div>
           <div class="lbl">پیدا نشده در بانک ❌</div>
@@ -646,6 +667,7 @@
           <button class="active" onclick="setFilter('all',this)">همه</button>
           <button onclick="setFilter('found',this)">قطعی با کد ✅</button>
           <button onclick="setFilter('review',this)">نیاز به بررسی دستی ⚠️</button>
+          <button onclick="setFilter('multiple',this)">مشابه چندگانه 🌸</button>
           <button onclick="setFilter('duplicate',this)">تکراری ⛔</button>
           <button onclick="setFilter('notfound',this)">پیدا نشده ❌</button>
         </div>
@@ -743,6 +765,7 @@
       formData.append('use_amount', String(useAmount));
       formData.append('credit_only', String(creditOnly));
       formData.append('tx_type_filter', txTypeFilter);
+      formData.append('use_date', String(document.getElementById('opt-date').checked));
 
       try {
         const response = await fetch('/analyze', {
@@ -779,6 +802,7 @@
         document.getElementById('s-found').textContent = data.found;
         document.getElementById('s-review').textContent = data.review;
         document.getElementById('s-duplicate').textContent = data.duplicate || 0;
+        document.getElementById('s-multiple').textContent = data.multiple || 0;
         document.getElementById('s-notfound').textContent = data.not_found;
         document.getElementById('s-bank').textContent = data.bank_total;
 
@@ -801,19 +825,40 @@
       tbody.innerHTML = '';
       results.forEach((r, i) => {
         const tr = document.createElement('tr');
-        tr.dataset.status = (r.status === 'exact') ? 'found' : (r.status === 'review') ? 'review' : (r.status === 'duplicate') ? 'duplicate' : 'notfound';
+        tr.dataset.status = (r.status === 'exact') ? 'found' : (r.status === 'review') ? 'review' : (r.status === 'multiple') ? 'multiple' : (r.status === 'duplicate') ? 'duplicate' : 'notfound';
         const typeTag = r.doc_type === 'بستانکار'
           ? `<span class="col-type col-credit">↑ بستانکار</span>`
           : r.doc_type === 'بدهکار' ? `<span class="col-type col-debit">↓ بدهکار</span>` : `<span class="col-type">—</span>`;
 
         let statusBadge = '';
-        if (r.status === 'exact') statusBadge = `<span class="status-badge found" style="background:rgba(21,128,61,.1);color:#15803d;border:1px solid rgba(21,128,61,.25)">✅ پیدا شد (۱۰۰٪)</span>`;
-        else if (r.status === 'review') statusBadge = `<span class="status-badge" style="color:#b45309;background:rgba(180,83,9,.12);border:1px solid rgba(180,83,9,.25);">⚠️ بررسی دستی</span>`;
-        else if (r.status === 'duplicate') statusBadge = `<span class="status-badge" style="color:#7e22ce;background:rgba(126,34,206,.1);border:1px solid rgba(126,34,206,.25);">⛔ تکراری در سیستم</span>`;
-        else statusBadge = `<span class="status-badge notfound" style="background:rgba(185,28,28,.08);color:#b91c1c;border:1px solid rgba(185,28,28,.25)">❌ پیدا نشد</span>`;
+        if (r.status === 'exact') {
+           statusBadge = `<span class="status-badge found" style="background:rgba(21,128,61,.1);color:#15803d;border:1px solid rgba(21,128,61,.25)">✅ پیدا شد (۱۰۰٪)</span>`;
+        } else if (r.status === 'review') {
+           statusBadge = `<span class="status-badge" style="color:#b45309;background:rgba(180,83,9,.12);border:1px solid rgba(180,83,9,.25);">⚠️ بررسی دستی</span>`;
+        } else if (r.status === 'multiple') {
+           statusBadge = `<span class="status-badge multiple">🌸 وجود چندگانه در اکسل</span>`;
+        } else if (r.status === 'duplicate') {
+           statusBadge = `<span class="status-badge duplicate">⛔ تکراری در سیستم</span>`;
+        } else {
+           statusBadge = `<span class="status-badge notfound" style="background:rgba(185,28,28,.08);color:#b91c1c;border:1px solid rgba(185,28,28,.25)">❌ پیدا نشد</span>`;
+        }
 
-        const matched = (r.status === 'exact' || r.status === 'review') ? `<div class="match-type" style="margin-top:4px">${r.match_method}</div>` : '';
-        const excelRow = (r.status === 'exact' || r.status === 'review') && r.bank_row ? `ردیف ${r.bank_row}` : '—';
+        let matchDetails = '';
+        if (r.status === 'exact' || r.status === 'review' || r.status === 'multiple' || r.status === 'duplicate') {
+            matchDetails = `<div class="match-type" style="margin-top:4px">${r.match_method}</div>`;
+            if (r.bank_sender) {
+                // Remove extra padding or tags from the name to keep it clean
+                const cleanSender = r.bank_sender.replace(/[\|\-]/g, ' ').trim();
+                matchDetails += `<div class="match-type" style="margin-top:2px; color: #4f46e5; font-size: 0.72rem; font-weight: 500;">👤 نام در اکسل: ${cleanSender}</div>`;
+            }
+        }
+        
+        let excelRow = '—';
+        if (r.status === 'multiple' && r.bank_rows && r.bank_rows.length > 0) {
+            excelRow = `ردیف‌های ${r.bank_rows.join(', ')}`;
+        } else if ((r.status === 'exact' || r.status === 'review' || r.status === 'duplicate') && r.bank_row) {
+            excelRow = `ردیف ${r.bank_row}`;
+        }
 
         tr.innerHTML = `
       <td style="color:var(--text2);font-size:.75rem">${r.idx || i + 1}</td>
@@ -823,7 +868,7 @@
       <td class="amount">${fmtAmt(r.amount)}</td>
       <td class="tracking" style="color:#b45309; font-weight: 600;">${r.codes || '—'}</td>
       <td style="font-size:.8rem;max-width:200px">${r.sender || r.desc || '—'}</td>
-      <td>${statusBadge}${matched}</td>
+      <td>${statusBadge}${matchDetails}</td>
       <td style="font-size:.85rem;font-weight:600;color:var(--text);text-align:center">${excelRow}</td>
     `;
         tbody.appendChild(tr);
@@ -855,8 +900,8 @@
     <p>تاریخ: ${new Date().toLocaleDateString('fa-IR')}</p>
     <table><thead><tr><th>#</th><th>تاریخ</th><th>نوع</th><th>مبلغ</th><th>کد ۴ رقمی</th><th>نام</th><th>وضعیت</th><th>روش</th></tr></thead><tbody>
     ${allResults.map((r, i) => {
-        let stColor = r.status === 'exact' ? 'green' : r.status === 'review' ? 'orange' : r.status === 'duplicate' ? 'purple' : 'red';
-        let stText = r.status === 'exact' ? '✅ پیدا شد' : r.status === 'review' ? '⚠️ نیاز به بررسی' : r.status === 'duplicate' ? '⛔ حساب‌شده (تکراری)' : '❌ پیدا نشد';
+        let stColor = r.status === 'exact' ? 'green' : r.status === 'review' ? 'orange' : r.status === 'multiple' ? 'hotpink' : r.status === 'duplicate' ? '#a16207' : 'red';
+        let stText = r.status === 'exact' ? '✅ پیدا شد' : r.status === 'review' ? '⚠️ نیاز به بررسی' : r.status === 'multiple' ? '🌸 مشابه چندگانه' : r.status === 'duplicate' ? '⛔ حساب‌شده (تکراری)' : '❌ پیدا نشد';
         return `<tr><td>${r.idx || i + 1}</td><td>${r.date || ''}</td><td>${r.doc_type || ''}</td>
     <td>${r.amount ? Number(r.amount).toLocaleString() : ''}</td>
     <td>${r.codes || ''}</td><td>${r.sender || ''}</td>
@@ -869,12 +914,19 @@
     }
 
     function exportCSV() {
-      const hdr = ['ردیف', 'تاریخ', 'شماره سند', 'نوع', 'مبلغ', 'کد ۴ رقمی', 'نام/شرح', 'وضعیت', 'روش تطبیق'];
+      const hdr = ['ردیف', 'تاریخ', 'شماره سند', 'نوع', 'مبلغ', 'کد ۴ رقمی', 'نام/شرح', 'وضعیت', 'روش تطبیق', 'ردیف‌های پیدا شده'];
       const data = allResults.map((r, i) => {
-        const stText = r.status === 'exact' ? 'پیدا شد' : r.status === 'review' ? 'نیاز به بررسی دستی (نام)' : r.status === 'duplicate' ? 'تکراری حساب شده در فایل اکسل' : 'پیدا نشد';
+        const stText = r.status === 'exact' ? 'پیدا شد' : r.status === 'review' ? 'نیاز به بررسی دستی (نام)' : r.status === 'multiple' ? 'مشابه چندگانه در اکسل' : r.status === 'duplicate' ? 'تکراری حساب شده در فایل اکسل' : 'پیدا نشد';
+        let excelRowsCsv = '—';
+        if (r.status === 'multiple' && r.bank_rows && r.bank_rows.length > 0) {
+            excelRowsCsv = r.bank_rows.join(' - ');
+        } else if ((r.status === 'exact' || r.status === 'review' || r.status === 'duplicate') && r.bank_row) {
+            excelRowsCsv = r.bank_row;
+        }
+
         return [
           r.idx || i + 1, r.date || '', r.doc_num || '', r.doc_type || '', r.amount || '', r.codes || '', r.sender || '',
-          stText, r.match_method || ''
+          stText, r.match_method || '', excelRowsCsv
         ];
       });
       const csv = [hdr, ...data].map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');

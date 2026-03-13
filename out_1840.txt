@@ -1,0 +1,28 @@
+=== HTML rows with 1840000000 ===
+  codes: ['3883', '8330', '978330']
+  amount: 1840000000.0
+  desc: 272,458 | چ 1404/11/01 | واريز نقد به بانک (از مشتري) | - | - | - | بس 9,576/987 | - | 1,840,000,000
+
+
+=== BANK rows with 1840000000 ===
+  row: 557
+  all_codes: ['140411010132084830', '3883', '404110101320848', '570130100000000394773883', '73883', '747209436360']
+  last4: 
+  amount: 1840000000.0
+  tx_type: deposit
+  desc: حواله  ACH  و کارمزد | IMPT-EMPTY | 404110101320848
+
+
+=== HTML codes for 1840: ['3883', '8330', '978330'] ===
+Checking each code in bank index...
+
+Code '3883': found in bank? True
+  -> row 557, amount=1840000000.0, diff=0.0
+
+Code '8330': found in bank? True
+  -> row 1231, amount=1000000000.0, diff=840000000.0
+
+Code '978330': found in bank? False
+  last4 '8330': True
+    -> row 1231, amount=1000000000.0
+  last5 '78330': False
