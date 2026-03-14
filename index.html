@@ -1430,6 +1430,7 @@
           box.innerHTML = '<div style="color:var(--danger);text-align:center;">هیچ سندی در این بازه زمانی یافت نشد.</div>';
           loadedReceiptsData = null;
         } else {
+           loadedReceiptsData = validReceipts;
            // Build a detailed table of all documents
            const rows = validReceipts.map((rec, i) => {
              const type   = rec.NO || '—';
@@ -1644,32 +1645,22 @@
         let response;
 
         if (sourceMode === 'api') {
-          // ── API Mode: fetch documents from Tah-eh Hesab ──
-          document.getElementById('loading-text').textContent = 'در حال دریافت اسناد از نرم‌افزار حسابداری...';
+          // ── API Mode: use already-loaded receipts + Excel file ──
+          document.getElementById('loading-text').textContent = 'در حال تطبیق اسناد با فایل اکسل...';
 
-          const apiUrl     = getApiBaseUrl();
-          const apiHeaders = getApiHeaders();
-          const dateFrom   = document.getElementById('api-date-from').value.trim();
-          const dateTo     = document.getElementById('api-date-to').value.trim();
-          const banks      = getSelectedBanks();
-          if (!apiUrl) throw new Error('آدرس API تنظیم نشده است. لطفاً در تنظیمات API پر کنید.');
-          if (!dateFrom || !dateTo) throw new Error('لطفاً از تاریخ و تا تاریخ را وارد کنید.');
-          if (banks.length === 0) throw new Error('لطفاً حداقل یک حساب بانکی را انتخاب کنید.');
+          if (!loadedReceiptsData) throw new Error('ابتدا اسناد واریزی را دریافت کنید (دکمه ۲).');
+          const banks = getSelectedBanks();
 
           const formData = new FormData();
-          formData.append('excel_file', excelFile);
-          formData.append('api_url',     apiUrl);
-          formData.append('api_headers', JSON.stringify(apiHeaders));
-          formData.append('moshtari_code', selectedCustomer.Code);
-          formData.append('date_from',   dateFrom);
-          formData.append('date_to',     dateTo);
-          formData.append('selected_banks', banks.join(','));
-          formData.append('use_tracking', String(useTracking));
-          formData.append('use_name',     String(useName));
-          formData.append('use_amount',   String(useAmount));
-          formData.append('credit_only',  String(creditOnly));
-          formData.append('tx_type_filter', txTypeFilter);
-          formData.append('use_date',     String(useDate));
+          formData.append('excel_file',      excelFile);
+          formData.append('loaded_receipts', JSON.stringify(loadedReceiptsData));
+          formData.append('selected_banks',  banks.join(','));
+          formData.append('use_tracking',    String(useTracking));
+          formData.append('use_name',        String(useName));
+          formData.append('use_amount',      String(useAmount));
+          formData.append('credit_only',     String(creditOnly));
+          formData.append('tx_type_filter',  txTypeFilter);
+          formData.append('use_date',        String(useDate));
 
           response = await fetch('/analyze-from-api', { method: 'POST', body: formData });
         } else {

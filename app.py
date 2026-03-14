@@ -25,7 +25,7 @@ import ssl
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from fastapi import FastAPI, UploadFile, File, Form, Body, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from bs4 import BeautifulSoup
@@ -708,12 +708,13 @@ def match_receipts(
     # ── 1. Strict Rule: Only keep banking-related document types ──
     # Exclude gold trading (خرید طلا, فروش طلا, etc.) entirely.
     # Only keep money transfers: واریز نقد به بانک, خروج وجه نقد, واریز به حساب, برداشت از حساب, etc.
-    VALID_DOC_TYPES = re.compile(r"واریز نقد به بانک|خروج وجه نقد|واریز|برداشت|حواله|انتقال|ساتنا|پایا|نقد|فیش|چک", re.IGNORECASE)
+    VALID_DOC_TYPES = re.compile(r"واریز|واريز|خروج|برداشت|حواله|انتقال|ساتنا|پایا|نقد|فیش|چک", re.IGNORECASE)
     
     banking_rows = []
     for r in rows:
-        # Check if the description contains a valid banking document type
-        if VALID_DOC_TYPES.search(r.get("desc", "")):
+        # Check if the description contains a valid banking document type or if it came from API (has 'no' field)
+        desc_str = str(r.get("desc", "")) + " " + str(r.get("no", ""))
+        if VALID_DOC_TYPES.search(desc_str):
             banking_rows.append(r)
             
     logger.info(f"Rows after filtering for valid banking types: {len(banking_rows)}")
@@ -723,9 +724,9 @@ def match_receipts(
     # or 6-digit tracking code should be checked in Excel.
     valid_rows = []
     for r in banking_rows:
-        valid_codes = [c for c in r.get("codes", []) if len(c) >= 4]
+        valid_codes = [c for c in r.get("codes", []) if len(c) >= 4] 
         if valid_codes:
-            r["codes"] = valid_codes  # Filter out noise codes < 4 chars
+            r["codes"] = valid_codes
             valid_rows.append(r)
             
     rows = valid_rows
@@ -788,7 +789,7 @@ def match_receipts(
         logger.info(f"Sample PDF row codes: {[r.get('codes') for r in rows[:10]]}")
         
     for r in rows:
-        amount  = r.get("credit") or r.get("debit") or 0
+        amount  = r.get("amount") or r.get("credit") or r.get("debit") or 0
         codes   = r.get("codes", [])
         sender  = r.get("sender", "")
 
@@ -1018,54 +1019,59 @@ async def analyze_from_api(
     # ── Normalize DoListAsnad → pdf_rows ─────────────────────────────────────────
     # Each record has: Tarikh, NO (نوع سند), Mali (مالی), Sh_Factor, Sharh1, MCode, Bank_Name
     pdf_rows = []
+    
+    # asnad_raw could be a dict { "1": {...} } or a list [{...}]
+    raw_list = []
     if isinstance(asnad_raw, dict):
-        for key, rec in asnad_raw.items():
-            if not isinstance(rec, dict):
-                continue
-            
-            # Filter by selected banks
-            raw_bank_name = rec.get("Name_Bank")
-            bank_name = str(raw_bank_name).strip() if raw_bank_name is not None else ""
-            
-            if not is_all_banks:
-                if not bank_name or bank_name == "None":
-                    continue
-                # Handle sub-string matches since UI uses "اقتصاد نوین" but API may send "بانک اقتصاد نوین"
-                matches_selected = any(b in bank_name or bank_name in b for b in allowed_banks)
-                if not matches_selected:
-                    continue
+        raw_list = list(asnad_raw.values())
+    elif isinstance(asnad_raw, list):
+        raw_list = asnad_raw
 
-            no_sanad = str(rec.get("NO", "")).strip()
-            mali = rec.get("Mali")
-            tarikh = str(rec.get("Tarikh", "")).strip()
-            sh = str(rec.get("Sh_Factor", "")).strip()
-            sharh = str(rec.get("Sharh1") or rec.get("Sharh2") or "").strip()
-            mcode = str(rec.get("MCode", "")).strip()
+    for rec in raw_list:
+        if not isinstance(rec, dict):
+            continue
+        
+        # Note: bank and doc type filtering is already done on the frontend before sending
+        no_sanad = str(rec.get("NO", "")).strip()
+        mali = rec.get("Mali")
+        tarikh = str(rec.get("Tarikh", "")).strip()
+        sh = str(rec.get("Sh_Factor", "")).strip()
+        sharh1 = str(rec.get("Sharh1") or "").strip()
+        sharh2 = str(rec.get("Sharh2") or "").strip()
+        sharh = sharh1 or sharh2
+        logger.info(f"API Record -> No: {no_sanad}, Mali: {mali}, Sh: {sh}, Sharh: {sharh}")
+        mcode = str(rec.get("MCode", "")).strip()
 
-            # Classify: if Mali > 0 = بستانکار, Mali < 0 = بدهکار
-            try:
-                mali_val = float(mali)
-            except (TypeError, ValueError):
-                mali_val = 0
+        # Classify: if Mali > 0 = بستانکار, Mali < 0 = بدهکار
+        try:
+            mali_str = str(mali).replace(",", "").strip()
+            mali_val = float(mali_str)
+        except (TypeError, ValueError):
+            mali_val = 0
 
-            doc_type = "بستانکار" if mali_val > 0 else "بدهکار"
-            amount = abs(mali_val)
+        doc_type = "بستانکار" if mali_val > 0 else "بدهکار"
+        amount = abs(mali_val)
 
-            # Extract 4-digit tracking codes and sender from Sharh
-            import re as _re
-            codes = _re.findall(r'\b\d{4}\b', sharh)
-            sender = sharh if sharh else mcode
+        # Extract 4-digit tracking codes from Sharh AND Sh_Factor
+        # Sh_Factor often contains the receipt sequence number on the bank statement
+        import re as _re
+        code_src = f"{sharh} {sharh2} {sh}"
+        codes = list(set(_re.findall(r'\b\d{4}\b', code_src)))
+        # Also add Sh_Factor itself as a code if it's purely numeric (4-5 digits)
+        if sh and sh.isdigit() and 4 <= len(sh) <= 5:
+            codes.append(sh)
+        sender = sharh if sharh else (sh if sh else mcode)
 
-            pdf_rows.append({
-                "date":     tarikh,
-                "doc_num":  sh,
-                "doc_type": doc_type,
-                "amount":   amount,
-                "codes":    codes,
-                "sender":   sender,
-                "desc":     sharh,
-                "no":       no_sanad,
-            })
+        pdf_rows.append({
+            "date":     tarikh,
+            "doc_num":  sh,
+            "doc_type": doc_type,
+            "amount":   amount,
+            "codes":    codes,
+            "sender":   sender,
+            "desc":     f"{sharh} {sharh2}".strip(),
+            "no":       no_sanad,
+        })
 
     # ── Parse Excel ──────────────────────────────────────────────────────────────
     try:
@@ -1241,7 +1247,7 @@ async def analyze(
             save_path = f"d:/Checkhesab/{new_filename}"
             wb.save(save_path)
             
-            logger.info(f"Generated locked Excel with {len(matched_rows)} rows highlighted at {save_path}.")
+            logger.info(f"Generated locked Excel with {len(all_matched_rows)} rows highlighted at {save_path}.")
     except Exception as e:
         logger.error(f"Failed to generate locked excel: {e}")
 
