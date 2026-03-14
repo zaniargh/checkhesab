@@ -8,6 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;900&display=swap"
     rel="stylesheet" />
+    
+  <!-- Persian DatePicker CSS (local) -->
+  <link rel="stylesheet" href="/static/persian-datepicker.min.css">
 
   <style>
     *,
@@ -120,7 +123,11 @@
       background: rgba(34, 197, 94, .07);
     }
 
-    .upload-card input[type=file] {
+    #file-source-panel {
+      position: relative;
+    }
+
+    #file-source-panel input[type=file] {
       position: absolute;
       inset: 0;
       opacity: 0;
@@ -546,29 +553,401 @@
       background: rgba(239, 68, 68, .12);
       color: #f87171;
     }
+
+    /* Modal Styles */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(15, 23, 42, 0.6);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      backdrop-filter: blur(4px);
+    }
+    .modal {
+      background: var(--bg);
+      border-radius: var(--radius);
+      width: 90%;
+      max-width: 600px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      max-height: 90vh;
+    }
+    .modal-header {
+      padding: 20px 24px;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-header h2 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .modal-close {
+      background: transparent;
+      border: none;
+      font-size: 1.5rem;
+      color: var(--text2);
+      cursor: pointer;
+      line-height: 1;
+    }
+    .modal-body {
+      padding: 24px;
+      overflow-y: auto;
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+    .form-group input, .form-group select, .form-group textarea {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+      border-color: var(--accent);
+    }
+    .form-group textarea {
+      resize: vertical;
+      min-height: 80px;
+      font-family: monospace;
+      direction: ltr;
+      text-align: left;
+    }
+    .modal-footer {
+      padding: 16px 24px;
+      background: var(--bg2);
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+    .btn-secondary {
+      background: #e2e8f0;
+      color: #334155;
+    }
+    .btn-secondary:hover {
+      background: #cbd5e1;
+    }
+    #api-response-box {
+      margin-top: 16px;
+      background: #f1f5f9;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      direction: ltr;
+      text-align: left;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 200px;
+      overflow-y: auto;
+      display: none;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn-api {
+      background: #f7fee7;
+      color: #3f6212;
+      border: 1px solid #a3e635;
+      padding: 8px 16px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+    .btn-api:hover {
+      background: #ecfccb;
+      box-shadow: 0 2px 4px rgba(163, 230, 53, 0.2);
+    }
+    .mode-toggle {
+      display: flex;
+      gap: 0;
+      border: 1.5px solid var(--accent);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+    .mode-toggle button {
+      flex: 1;
+      background: transparent;
+      border: none;
+      padding: 9px 14px;
+      font-family: inherit;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      color: var(--accent);
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .mode-toggle button.active {
+      background: var(--accent);
+      color: #fff;
+    }
+    #api-source-panel { display: none; }
+    #file-source-panel { display: block; }
+    .customer-search-wrap {
+      position: relative;
+    }
+    .customer-search-wrap input {
+      width: 100%;
+      padding: 9px 12px;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 0.88rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .customer-search-wrap input:focus { border-color: var(--accent); }
+    .customer-dropdown {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0; right: 0;
+      background: #fff;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 50;
+      display: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .customer-dropdown.open { display: block; }
+    .customer-item {
+      padding: 9px 14px;
+      cursor: pointer;
+      font-size: 0.88rem;
+      border-bottom: 1px solid var(--border);
+      transition: background 0.15s;
+    }
+    .customer-item:last-child { border-bottom: none; }
+    .customer-item:hover { background: var(--bg3); }
+    .customer-item-code { font-size: 0.76rem; color: var(--text2); margin-right: 6px; font-family: monospace; }
+    .date-row { display: flex; gap: 12px; margin-top: 12px; }
+    .date-row > div { flex: 1; }
+    .date-row label { font-size: 0.82rem; font-weight: 600; color: var(--text); display: block; margin-bottom: 4px; }
+    .date-row input {
+      width: 100%;
+      padding: 9px 12px;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 0.88rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .date-row input:focus { border-color: var(--accent); }
+    .btn-load-customers {
+      margin-top: 10px;
+      width: 100%;
+      background: linear-gradient(135deg, #6366f1, #818cf8);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px;
+      font-family: inherit;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .btn-load-customers:hover { opacity: 0.88; }
+    .selected-customer-pill {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      background: rgba(99,102,241,0.1);
+      border: 1.5px solid var(--accent);
+      border-radius: 8px;
+      padding: 8px 12px;
+      margin-top: 8px;
+      font-size: 0.88rem;
+      color: var(--accent);
+    }
+    .selected-customer-pill.show { display: flex; }
+    .pill-clear { background: none; border: none; cursor: pointer; color: var(--danger); font-size: 1rem; line-height: 1; margin-right: auto; }
+
+    .bank-list-wrap {
+      margin-top: 12px;
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .bank-list-wrap.show { display: flex; }
+    .bank-list-wrap label.bl-title {
+      font-size: 0.82rem; font-weight: 600; color: var(--text); margin-bottom: 2px;
+    }
+    .bank-items {
+      max-height: 120px;
+      overflow-y: auto;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      text-align: right;
+    }
+    .bank-item-lbl {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      transition: background 0.15s;
+    }
+    .bank-item-lbl:hover { background: var(--bg3); }
+    .bank-item-lbl input[type=checkbox] {
+      width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer;
+    }
+
+    .receipts-preview-box {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg2);
+      font-size: 0.85rem;
+      display: none;
+    }
+    .receipts-preview-box.show { display: block; }
+    .btn-load-receipts {
+      background: var(--accent); color: white; border: none; padding: 8px 12px; border-radius: 6px;
+      cursor: pointer; font-size: 0.85rem; font-weight: 600; text-align: center; width: 100%; transition: background 0.15s; margin-top: 12px;
+    }
+    .btn-load-receipts:hover { background: var(--accent2); }
+    .btn-load-receipts:disabled { background: var(--border); color: var(--text2); cursor: not-allowed; }
   </style>
 </head>
 
 <body>
 
   <header>
-    <div class="logo">🏦</div>
-    <div>
-      <h1>سیستم تطبیق فیش‌های بانکی</h1>
-      <p>مقایسه صورت‌حساب مشتری (PDF) با پرینت حساب بانکی (Excel)</p>
+    <div style="display: flex; align-items: center; gap: 16px;">
+      <div class="logo">🏦</div>
+      <div>
+        <h1>سیستم تطبیق فیش‌های بانکی</h1>
+        <p>مقایسه صورت‌حساب مشتری (PDF) با پرینت حساب بانکی (Excel)</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="btn-api" onclick="openApiModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+        </svg>
+        تنظیمات اتصال به نرم‌افزار (API)
+      </button>
     </div>
   </header>
 
   <div class="container">
 
     <div class="upload-grid">
-      <div class="upload-card" id="pdf-card">
-        <input type="file" id="pdf-file" accept=".pdf,.html,.htm" />
-        <div class="icon">📄</div>
-        <h3>صورت‌حساب مشتری (PDF یا HTML)</h3>
-        <p>گزارش حساب مشتری — فایل HTML دقیق‌تر و بهتر است (یا PDF از نرم‌افزار)</p>
-        <span class="badge" id="pdf-badge">انتخاب نشده</span>
-        <div class="file-name" id="pdf-fname"></div>
+    <div class="upload-card" id="pdf-card" style="position:relative;">
+        <!-- Mode Toggle -->
+        <div class="mode-toggle" id="source-mode-toggle">
+          <button id="btn-mode-file" class="active" onclick="switchMode('file')">📄 فایل (HTML / PDF)</button>
+          <button id="btn-mode-api" onclick="switchMode('api')">🔗 دریافت از ته حساب (API)</button>
+        </div>
+
+        <!-- File Mode -->
+        <div id="file-source-panel">
+          <input type="file" id="pdf-file" accept=".pdf,.html,.htm" />
+          <div class="icon">📄</div>
+          <h3>صورت‌حساب مشتری (PDF یا HTML)</h3>
+          <p>گزارش حساب مشتری — فایل HTML دقیق‌تر و بهتر است</p>
+          <span class="badge" id="pdf-badge">انتخاب نشده</span>
+          <div class="file-name" id="pdf-fname"></div>
+        </div>
+
+        <!-- API Mode -->
+        <div id="api-source-panel">
+          <div class="icon">🏦</div>
+          <h3>انتخاب حساب مشتری از ته حساب</h3>
+          <p style="font-size:0.82rem;color:var(--text2);margin-bottom:12px;">اسناد مشتری مستقیماً از نرم‌افزار حسابداری خوانده می‌شود.</p>
+
+          <!-- Customer Search -->
+          <div class="customer-search-wrap">
+            <input type="text" id="customer-search-input" placeholder="جستجو: نام یا کد مشتری..." oninput="filterCustomers()" onfocus="openDropdown()" onblur="closeDropdownDelay()" autocomplete="off" />
+            <div class="customer-dropdown" id="customer-dropdown"></div>
+          </div>
+          <!-- Selected Customer -->
+          <div class="selected-customer-pill" id="selected-customer-pill">
+            <span>👤</span>
+            <span id="selected-customer-label">—</span>
+            <button class="pill-clear" onclick="clearCustomer()" title="پاک کردن">✕</button>
+          </div>
+
+          <!-- Bank Accounts Selection -->
+          <div class="bank-list-wrap" id="bank-list-wrap">
+            <label class="bl-title">💳 حساب‌های بانکی (برای اسناد دریافتی/پرداختی):</label>
+            <div class="bank-items" id="bank-items-container">
+              <div style="font-size:0.8rem;color:var(--text2);text-align:center;padding:10px;">در حال بارگذاری...</div>
+            </div>
+          </div>
+
+          <!-- Date Range -->
+          <div class="date-row">
+            <div>
+              <label>📅 از تاریخ (شمسی)</label>
+              <input type="text" id="api-date-from" class="pdate" placeholder="DD-MM-YYYY مثل: 01-01-1403" dir="ltr" onchange="clearReceiptsPreview()" />
+            </div>
+            <div>
+              <label>📅 تا تاریخ (شمسی)</label>
+              <input type="text" id="api-date-to" class="pdate" placeholder="DD-MM-YYYY مثل: 29-12-1404" dir="ltr" onchange="clearReceiptsPreview()" />
+            </div>
+          </div>
+          <!-- Filter toggle -->
+          <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:0.85rem;cursor:pointer;">
+            <input type="checkbox" id="filter-varize-naghd" checked onchange="clearReceiptsPreview()" style="width:16px;height:16px;cursor:pointer;">
+            <span>🔍 فقط اسناد «واریز نقد به بانک»</span>
+          </label>
+          <!-- Load Customers Btn -->
+          <button class="btn-load-customers" id="load-customers-btn" onclick="loadCustomers()">
+            🔄 ۱. بارگذاری لیست مشتریان
+          </button>
+          
+          <!-- Fetch Receipts Button & Preview -->
+          <button class="btn-load-receipts" id="load-receipts-btn" onclick="fetchAndPreviewReceipts()" style="display:none;">
+            📥 ۲. دریافت اسناد واریزی مشتری
+          </button>
+          <div class="receipts-preview-box" id="receipts-preview-box"></div>
+
+          <span class="badge" id="api-badge" style="margin-top:8px;">انتخاب نشده</span>
+        </div>
       </div>
       <div class="upload-card" id="excel-card">
         <input type="file" id="excel-file" accept=".xls,.xlsx,.csv" />
@@ -618,12 +997,67 @@
 
     <div class="error-box" id="error-box"></div>
 
-    <button class="btn-check" id="check-btn" disabled>
-      <span>🔍</span> بررسی فیش‌ها
-    </button>
+    <div class="center-btn" style="margin-top: 24px;">
+      <button id="check-btn" class="btn" disabled>
+        <b>شروع پردازش و تطبیق</b>
+      </button>
+    </div>
 
-    <div id="loading">
-      <div class="spinner"></div>
+    <!-- API Settings Modal -->
+    <div class="modal-overlay" id="apiModal" onclick="if(event.target === this) closeApiModal()">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>تنظیمات اتصال مستقیم به نرم‌افزار حسابداری (ته حساب)</h2>
+          <button class="modal-close" onclick="closeApiModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="font-size: 0.85rem; color: var(--text2); margin-bottom: 20px;">شما می‌توانید با وارد کردن اطلاعات API سیستم حسابداری (آدرس، روش ارسال و پارامترها)، دیتای «واریز نقد به بانک» را مستقیماً دریافت کنید و نیازی به آپلود فایل HTML نداشته باشید.</p>
+          
+          <div style="display: flex; gap: 16px;">
+            <div class="form-group" style="flex: 2;">
+              <label>آدرس سرور (IP یا دامنه)</label>
+              <input type="text" id="api-url" placeholder="مثال: 127.0.0.1" dir="ltr" value="127.0.0.1">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label>پورت (Port)</label>
+              <input type="text" id="api-port" placeholder="مثال: 8080" dir="ltr">
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 16px;">
+            <div class="form-group" style="flex: 1;">
+              <label>نام پایگاه داده (DBName)</label>
+              <input type="text" id="api-dbname" placeholder="مثال: DB یا DB1" dir="ltr" value="DB">
+            </div>
+            <div class="form-group" style="flex: 2;">
+              <label>کد دسترسی (Bearer Token)</label>
+              <input type="text" id="api-token" placeholder="B1W5H3G5K..." dir="ltr">
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label>مسیر دقیق API (Endpoint)</label>
+            <input type="text" id="api-path" placeholder="/api/v1/receipts" dir="ltr">
+            <p style="font-size: 0.75rem; color: var(--text2); margin-top: 4px;">لطفاً مسیر دقیق دریافت فیش‌ها در نرم افزار را وارد کنید (مثلاً <code>/api/receipts</code> اگر می‌دانید).</p>
+          </div>
+          
+          <div id="api-response-box"></div>
+        </div>
+        
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeApiModal()" style="padding: 8px 16px; font-weight: 500;">بستن و انصراف</button>
+          <button class="btn btn-api" onclick="testApiConnection()" id="test-api-btn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            تست اتصال
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loading UI -->
+    <div id="loading" class="loading-overlay"></div>
       <p id="loading-text">در حال پردازش فایل‌ها...</p>
     </div>
 
@@ -705,6 +1139,443 @@
 
   <script>
     let pdfFile = null, excelFile = null, allResults = [];
+    let sourceMode = 'file'; // 'file' or 'api'
+    let allCustomers = [];   // raw list from API
+    let selectedCustomer = null; // {Code, Name}
+
+    // ── Dual Mode ──────────────────────────────────────
+    function switchMode(mode) {
+      sourceMode = mode;
+      document.getElementById('btn-mode-file').classList.toggle('active', mode === 'file');
+      document.getElementById('btn-mode-api').classList.toggle('active', mode === 'api');
+      document.getElementById('file-source-panel').style.display = mode === 'file' ? 'block' : 'none';
+      document.getElementById('api-source-panel').style.display = mode === 'api' ? 'block' : 'none';
+      updateBtn();
+    }
+
+    // ── Build base URL from saved API settings ─────────
+    function getApiBaseUrl() {
+      const s = JSON.parse(localStorage.getItem('apiSettings') || '{}');
+      let ip = (s.ip || '').trim();
+      let port = (s.port || '').trim();
+      if (!ip) return null;
+      if (!ip.startsWith('http://') && !ip.startsWith('https://')) ip = 'https://' + ip;
+      if (port) ip += ':' + port;
+      return ip;
+    }
+
+    function getApiHeaders() {
+      const s = JSON.parse(localStorage.getItem('apiSettings') || '{}');
+      const h = {};
+      if (s.token) h['Authorization'] = 'Bearer ' + s.token;
+      if (s.dbname) h['DBName'] = s.dbname;
+      return h;
+    }
+
+    // ── Load customers from API ────────────────────────
+    async function loadCustomers() {
+      const btn = document.getElementById('load-customers-btn');
+      const url = getApiBaseUrl();
+      if (!url) { alert('ابتدا در تنظیمات API آدرس سرور را وارد کنید.'); return; }
+      btn.disabled = true; btn.textContent = '⏳ در حال بارگذاری...';
+      try {
+        const resp = await fetch('/api/test-connection', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ url, method: 'POST', headers: getApiHeaders(), payload: { DoListMoshtari: [1, 99999] } })
+        });
+        const data = await resp.json();
+        if (!data.ok || !data.response) throw new Error(data.error || 'خطا در دریافت مشتریان');
+        allCustomers = Object.values(data.response).map(c => ({
+          Code: String(c.Code),
+          Name: c.Name || ''
+        }));
+        document.getElementById('customer-search-input').disabled = false;
+        document.getElementById('customer-search-input').placeholder = `جستجو در ${allCustomers.length} مشتری...`;
+        renderDropdown(allCustomers);
+      } catch (e) {
+        alert('خطا: ' + e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = '🔄 بارگذاری لیست مشتریان';
+      }
+    }
+
+    function renderDropdown(list) {
+      const dd = document.getElementById('customer-dropdown');
+      if (list.length === 0) {
+        dd.innerHTML = '<div class="customer-item" style="color:var(--text2);">موردی یافت نشد.</div>';
+      } else {
+        dd.innerHTML = list.slice(0, 100).map(c =>
+          `<div class="customer-item" onmousedown="selectCustomer('${c.Code.replace(/'/g,"\\'")}','${c.Name.replace(/'/g,"\\'")}')">
+             ${c.Name}
+             <span class="customer-item-code">${c.Code}</span>
+           </div>`
+        ).join('');
+      }
+      dd.classList.add('open');
+    }
+
+    function filterCustomers() {
+      const q = document.getElementById('customer-search-input').value.trim().toLowerCase();
+      const filtered = allCustomers.filter(c =>
+        c.Name.toLowerCase().includes(q) || c.Code.includes(q)
+      );
+      renderDropdown(filtered);
+    }
+
+    function openDropdown() {
+      if (allCustomers.length > 0) renderDropdown(allCustomers);
+    }
+
+    function closeDropdownDelay() {
+      setTimeout(() => {
+        document.getElementById('customer-dropdown').classList.remove('open');
+      }, 200);
+    }
+
+    function selectCustomer(code, name) {
+      selectedCustomer = { Code: code, Name: name };
+      document.getElementById('customer-search-input').value = name;
+      document.getElementById('customer-dropdown').classList.remove('open');
+      document.getElementById('selected-customer-label').textContent = name + '  (کد: ' + code + ')';
+      document.getElementById('selected-customer-pill').classList.add('show');
+      document.getElementById('api-badge').textContent = '✅ ' + name;
+      
+      // Load bank accounts
+      loadBankAccounts();
+    }
+
+    function clearCustomer() {
+      selectedCustomer = null;
+      document.getElementById('customer-search-input').value = '';
+      document.getElementById('selected-customer-pill').classList.remove('show');
+      document.getElementById('bank-list-wrap').classList.remove('show');
+      document.getElementById('api-badge').textContent = 'انتخاب نشده';
+      updateBtn();
+    }
+
+    // ── Load Bank Accounts ────────────────────────
+    async function loadBankAccounts() {
+      const wrap = document.getElementById('bank-list-wrap');
+      const container = document.getElementById('bank-items-container');
+      wrap.classList.add('show');
+      container.innerHTML = '<div style="font-size:0.8rem;color:var(--text2);text-align:center;padding:10px;">در حال بارگذاری حساب‌ها...</div>';
+      
+      const url = getApiBaseUrl();
+      if (!url) return;
+
+      try {
+        const resp = await fetch('/api/test-connection', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ url, method: 'POST', headers: getApiHeaders(), payload: { DoListHesabBanki: [] } })
+        });
+        const data = await resp.json();
+        if (!data.ok || !data.response) throw new Error(data.error || 'خطا در دریافت حساب‌ها');
+        
+        let banks = [];
+        if (Array.isArray(data.response)) { // sometimes returns an array
+          banks = data.response;
+        } else if (typeof data.response === 'object') { // sometimes returns an object mapped by index
+          banks = Object.values(data.response);
+        }
+
+        if (banks.length === 0) {
+          container.innerHTML = '<div style="font-size:0.8rem;color:var(--danger);text-align:center;padding:10px;">حساب بانکی در نرم‌افزار یافت نشد.</div>';
+          updateBtn();
+          return;
+        }
+
+        // Render checkboxes
+        // First option is "All Accounts"
+        let html = `
+          <label class="bank-item-lbl">
+            <input type="checkbox" id="chk-bank-all" checked onchange="toggleAllBanks(this.checked)" />
+            <strong>همه حساب‌های بانکی</strong>
+          </label>
+          <div style="border-top:1px dashed var(--border); margin:4px 0;"></div>
+        `;
+
+        banks.forEach((b, idx) => {
+          const name = b.Name_Bank || ('حساب ' + (idx+1));
+          html += `
+            <label class="bank-item-lbl">
+              <input type="checkbox" class="chk-bank" value="${name.replace(/"/g, '&quot;')}" checked onchange="checkBankSelection()" />
+              <span>${name}</span>
+            </label>
+          `;
+        });
+        
+        container.innerHTML = html;
+        updateBtn();
+
+      } catch (e) {
+        container.innerHTML = `<div style="font-size:0.8rem;color:var(--danger);text-align:center;padding:10px;">خطا: ${e.message}</div>`;
+      }
+    }
+
+    function toggleAllBanks(isChecked) {
+      document.querySelectorAll('.chk-bank').forEach(cb => cb.checked = isChecked);
+      updateBtn();
+    }
+
+    function checkBankSelection() {
+      const allChecked = Array.from(document.querySelectorAll('.chk-bank')).every(cb => cb.checked);
+      document.getElementById('chk-bank-all').checked = allChecked;
+      updateBtn();
+    }
+
+    function getSelectedBanks() {
+      if (!document.getElementById('bank-list-wrap').classList.contains('show')) return [];
+      const isAll = document.getElementById('chk-bank-all')?.checked;
+      if (isAll) return ['ALL'];
+      
+      const selected = [];
+      document.querySelectorAll('.chk-bank').forEach(cb => {
+        if (cb.checked) selected.push(cb.value);
+      });
+      return selected;
+    }
+
+    // ── Fetch and Preview Receipts ──────────────────────────────────────────────
+    let loadedReceiptsData = null;
+
+    async function fetchAndPreviewReceipts() {
+      const btn = document.getElementById('load-receipts-btn');
+      const box = document.getElementById('receipts-preview-box');
+      const url = getApiBaseUrl();
+      const dateFrom = document.getElementById('api-date-from').value.trim();
+      const dateTo = document.getElementById('api-date-to').value.trim();
+      const banks = getSelectedBanks();
+
+      if (!url) return alert('ابتدا تنظیمات API را کامل کنید.');
+      if (!selectedCustomer) return alert('مشتری انتخاب نشده است.');
+      if (!dateFrom || !dateTo) return alert('بازه زمانی (تاریخ) را مشخص کنید.');
+      if (banks.length === 0) return alert('حداقل یک حساب بانکی انتخاب کنید.');
+
+      btn.disabled = true;
+      btn.textContent = '⏳ در حال دریافت اسناد...';
+      box.style.display = 'block';
+      box.innerHTML = '<div style="color:var(--text2);text-align:center;">در حال ارتباط با نرم‌افزار حسابداری...</div>';
+      loadedReceiptsData = null;
+      updateBtn();
+
+      try {
+        // API expects YYYY-M-D format WITHOUT leading zeros
+        const stripZero = (s) => String(parseInt(s, 10));
+        const ensureYYYYMD = (d) => {
+            const parts = String(d).split(/[-/]/);
+            if (parts.length !== 3) return d;
+            if (parts[0].length === 4) {
+                return `${parts[0]}-${stripZero(parts[1])}-${stripZero(parts[2])}`;
+            }
+            return `${parts[2]}-${stripZero(parts[1])}-${stripZero(parts[0])}`;
+        };
+        const rawFrom = document.getElementById('api-date-from').value.trim();
+        const rawTo   = document.getElementById('api-date-to').value.trim();
+        const apiDateFrom = ensureYYYYMD(rawFrom);
+        const apiDateTo   = ensureYYYYMD(rawTo);
+        console.log('تاریخ ارسالی:', apiDateFrom, 'تا', apiDateTo);
+
+        const payload = {"DoListAsnad": [-1, selectedCustomer.Code, apiDateFrom, apiDateTo, "", 0]};
+        const resp = await fetch('/api/test-connection', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ url, method: 'POST', headers: getApiHeaders(), payload })
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || 'خطا در ارتباط با سرور برنامه');
+        
+        const asnadRaw = data.response;
+        if (asnadRaw && asnadRaw.ERROR) throw new Error(asnadRaw.ERROR);
+        
+        const isAllBanks = banks.includes('ALL');
+        let validReceipts = [];
+        let totalAmount = 0;
+        
+        if (typeof asnadRaw === 'object' && asnadRaw !== null) {
+          const onlyVarize = document.getElementById('filter-varize-naghd').checked;
+          const docTypesFound = new Set();
+          
+          // Normalize Arabic/Persian chars for reliable comparison
+          const normAr = (s) => String(s)
+            .replace(/ك/g, 'ک').replace(/ي/g, 'ی')
+            .replace(/\u200c/g, ' ').trim();
+
+          Object.values(asnadRaw).forEach(rec => {
+             if (typeof rec !== 'object') return;
+             const docType = (rec.NO || '').trim();
+             docTypesFound.add(docType);
+             
+             // Apply docType filter if checkbox is checked
+             if (onlyVarize && !normAr(docType).includes('واریز نقد')) return;
+             
+             // Bank filter
+             if (!isAllBanks) {
+               const bankName = String(rec.Name_Bank || '').trim();
+               if (!bankName || bankName === 'null') return;
+               const matchesBank = banks.some(b => bankName.includes(b) || b.includes(bankName));
+               if (!matchesBank) return;
+             }
+             
+             validReceipts.push(rec);
+             const mali = parseFloat(rec.Mali) || 0;
+             totalAmount += Math.abs(mali);
+          });
+          
+          console.log("انواع اسناد موجود در این بازه:", Array.from(docTypesFound));
+        }
+
+        if (validReceipts.length === 0) {
+          box.innerHTML = '<div style="color:var(--danger);text-align:center;">هیچ سندی در این بازه زمانی یافت نشد.</div>';
+          loadedReceiptsData = null;
+        } else {
+           // Build a detailed table of all documents
+           const rows = validReceipts.map((rec, i) => {
+             const type   = rec.NO || '—';
+             const date   = rec.Tarikh || '—';
+             const bank   = rec.Name_Bank || '—';
+             const mali   = parseFloat(rec.Mali) || 0;
+             const sharh  = rec.Sharh1 || rec.Sharh2 || '—';
+             const sh     = rec.Sh_Factor || '—';
+             const amtStr = mali !== 0 ? Number(Math.abs(mali)).toLocaleString() : '—';
+             const color  = mali > 0 ? '#10b981' : mali < 0 ? '#ef4444' : '';
+             return `<tr>
+               <td style="text-align:center;">${i + 1}</td>
+               <td dir="ltr">${date}</td>
+               <td>${type}</td>
+               <td>${bank}</td>
+               <td style="color:${color};text-align:left;direction:ltr;">${amtStr}</td>
+               <td>${sharh}</td>
+             </tr>`;
+           }).join('');
+
+           box.innerHTML = `
+             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+               <strong>اسناد دریافتی (${validReceipts.length} سند — جمع: ${fmtAmt(totalAmount)})</strong>
+               <span class="badge" style="background:rgba(34,197,94,0.15);color:#10b981;">✅ موفق</span>
+             </div>
+             <div style="overflow-x:auto;max-height:280px;overflow-y:auto;">
+               <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+                 <thead>
+                   <tr style="background:var(--card-bg);position:sticky;top:0;">
+                     <th style="padding:5px 6px;border-bottom:1px solid var(--border);">#</th>
+                     <th style="padding:5px 6px;border-bottom:1px solid var(--border);">تاریخ</th>
+                     <th style="padding:5px 6px;border-bottom:1px solid var(--border);">نوع سند</th>
+                     <th style="padding:5px 6px;border-bottom:1px solid var(--border);">بانک</th>
+                     <th style="padding:5px 6px;border-bottom:1px solid var(--border);">مبلغ</th>
+                     <th style="padding:5px 6px;border-bottom:1px solid var(--border);">شرح</th>
+                   </tr>
+                 </thead>
+                 <tbody>${rows}</tbody>
+               </table>
+             </div>`;
+           loadedReceiptsData = asnadRaw;
+        }
+
+      } catch (err) {
+        box.innerHTML = `<div style="color:var(--danger);text-align:center;padding:10px;">خطا: ${err.message}</div>`;
+        loadedReceiptsData = null;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '📥 ۲. دریافت مجدد اسناد واریزی';
+        updateBtn();
+      }
+    }
+
+    function clearReceiptsPreview() {
+      loadedReceiptsData = null;
+      document.getElementById('receipts-preview-box').style.display = 'none';
+      const btn = document.getElementById('load-receipts-btn');
+      if (btn) btn.textContent = '📥 ۲. دریافت اسناد واریزی مشتری';
+      updateBtn();
+    }
+
+    // API Modal Handlers
+    function openApiModal() {
+      document.getElementById('apiModal').style.display = 'flex';
+      const savedSettings = localStorage.getItem('apiSettings');
+      if (savedSettings) {
+        try {
+          const s = JSON.parse(savedSettings);
+          if (s.ip) document.getElementById('api-url').value = s.ip;
+          if (s.port) document.getElementById('api-port').value = s.port;
+          if (s.dbname) document.getElementById('api-dbname').value = s.dbname;
+          if (s.token) document.getElementById('api-token').value = s.token;
+          if (s.path) document.getElementById('api-path').value = s.path;
+        } catch (e) {}
+      }
+    }
+
+    function closeApiModal() {
+      document.getElementById('apiModal').style.display = 'none';
+      document.getElementById('api-response-box').style.display = 'none';
+    }
+
+    async function testApiConnection() {
+      const ip = document.getElementById('api-url').value.trim();
+      const port = document.getElementById('api-port').value.trim();
+      const dbname = document.getElementById('api-dbname').value.trim();
+      const token = document.getElementById('api-token').value.trim();
+      const path = document.getElementById('api-path').value.trim();
+      const resBox = document.getElementById('api-response-box');
+      const btn = document.getElementById('test-api-btn');
+      
+      if (!ip) { alert("لطفاً آدرس سرور (IP) را وارد کنید."); return; }
+      
+      // Auto format URL if it doesn't have http schema
+      let fullUrl = ip;
+      if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
+        fullUrl = 'http://' + fullUrl;
+      }
+      
+      if (port) {
+        // Only append port if not already in the IP string
+        if (!ip.includes(':' + port)) {
+            fullUrl += ':' + port;
+        }
+      }
+      
+      if (path && path.startsWith('/')) {
+        fullUrl += path;
+      } else if (path) {
+        fullUrl += '/' + path;
+      }
+      
+      const headers = {};
+      if (token) {
+        headers['Authorization'] = 'Bearer ' + token;
+      }
+      if (dbname) {
+        headers['DBName'] = dbname;
+      }
+      
+      localStorage.setItem('apiSettings', JSON.stringify({ ip, port, dbname, token, path }));
+      btn.disabled = true; btn.innerHTML = 'در حال اتصال...';
+      resBox.style.display = 'block'; resBox.style.borderLeft = '4px solid #f59e0b';
+      resBox.textContent = `در حال ارسال درخواست به ${fullUrl}...\nبا توکن Bearer و سرور ${dbname}...`;
+      
+      try {
+        const payload = {"CheckHealth": []}; 
+        const response = await fetch('/api/test-connection', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ url: fullUrl, method: 'POST', headers: headers, payload: payload }) 
+        });
+        const data = await response.json();
+        resBox.style.borderLeft = data.ok && data.status_code >= 200 && data.status_code < 300 ? '4px solid #10b981' : '4px solid #ef4444';
+        let out = `Status: ${data.status_code || 'Error'}\n\n`;
+        if (data.response) out += JSON.stringify(data.response, null, 2);
+        else if (data.error) out += data.error;
+        resBox.textContent = out;
+      } catch (err) {
+        resBox.style.borderLeft = '4px solid #ef4444';
+        resBox.textContent = 'خطا در ارتباط با سرور برنامه:\n' + err.message;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'تست اتصال';
+      }
+    }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────────
     function log(msg) {
@@ -714,7 +1585,21 @@
     }
     function showError(msg) { const e = document.getElementById('error-box'); e.textContent = msg; e.style.display = 'block'; }
     function clearError() { document.getElementById('error-box').style.display = 'none'; }
-    function updateBtn() { document.getElementById('check-btn').disabled = !(pdfFile && excelFile); }
+    function updateBtn() {
+      const fileReady = sourceMode === 'file' && pdfFile && excelFile;
+      const apiReady  = sourceMode === 'api'  && selectedCustomer && excelFile && getSelectedBanks().length > 0 && loadedReceiptsData !== null;
+      document.getElementById('check-btn').disabled = !(fileReady || apiReady);
+      
+      // Update logic for fetch receipts button
+      const fetchBtn = document.getElementById('load-receipts-btn');
+      if (sourceMode === 'api' && selectedCustomer) {
+        fetchBtn.style.display = 'block';
+        // Date validation happens on click - just need customer and bank selected
+        fetchBtn.disabled = getSelectedBanks().length === 0;
+      } else {
+        fetchBtn.style.display = 'none';
+      }
+    }
     function fmtAmt(n) { return (n || n === 0) ? Number(n).toLocaleString('en-US') : '—'; }
 
     document.getElementById('pdf-file').addEventListener('change', function () {
@@ -747,69 +1632,97 @@
       document.getElementById('results').style.display = 'none';
       document.getElementById('log-box').textContent = '';
       document.getElementById('check-btn').disabled = true;
-      document.getElementById('loading-text').textContent = 'در حال ارسال فایل‌ها به سرور و پردازش...';
 
       const useTracking = document.getElementById('opt-tracking').checked;
-      const useName = document.getElementById('opt-name').checked;
-      const useAmount = document.getElementById('opt-amount').checked;
-      const creditOnly = document.getElementById('opt-credit-only').checked;
-      const txTypeFilter = document.getElementById('opt-tx-type').value;
-
-      const formData = new FormData();
-      formData.append('pdf_file', pdfFile);
-      formData.append('excel_file', excelFile);
-
-      // Append options as strings
-      formData.append('use_tracking', String(useTracking));
-      formData.append('use_name', String(useName));
-      formData.append('use_amount', String(useAmount));
-      formData.append('credit_only', String(creditOnly));
-      formData.append('tx_type_filter', txTypeFilter);
-      formData.append('use_date', String(document.getElementById('opt-date').checked));
+      const useName     = document.getElementById('opt-name').checked;
+      const useAmount   = document.getElementById('opt-amount').checked;
+      const creditOnly  = document.getElementById('opt-credit-only').checked;
+      const txTypeFilter= document.getElementById('opt-tx-type').value;
+      const useDate     = document.getElementById('opt-date').checked;
 
       try {
-        const response = await fetch('/analyze', {
-          method: 'POST',
-          body: formData
-        });
+        let response;
+
+        if (sourceMode === 'api') {
+          // ── API Mode: fetch documents from Tah-eh Hesab ──
+          document.getElementById('loading-text').textContent = 'در حال دریافت اسناد از نرم‌افزار حسابداری...';
+
+          const apiUrl     = getApiBaseUrl();
+          const apiHeaders = getApiHeaders();
+          const dateFrom   = document.getElementById('api-date-from').value.trim();
+          const dateTo     = document.getElementById('api-date-to').value.trim();
+          const banks      = getSelectedBanks();
+          if (!apiUrl) throw new Error('آدرس API تنظیم نشده است. لطفاً در تنظیمات API پر کنید.');
+          if (!dateFrom || !dateTo) throw new Error('لطفاً از تاریخ و تا تاریخ را وارد کنید.');
+          if (banks.length === 0) throw new Error('لطفاً حداقل یک حساب بانکی را انتخاب کنید.');
+
+          const formData = new FormData();
+          formData.append('excel_file', excelFile);
+          formData.append('api_url',     apiUrl);
+          formData.append('api_headers', JSON.stringify(apiHeaders));
+          formData.append('moshtari_code', selectedCustomer.Code);
+          formData.append('date_from',   dateFrom);
+          formData.append('date_to',     dateTo);
+          formData.append('selected_banks', banks.join(','));
+          formData.append('use_tracking', String(useTracking));
+          formData.append('use_name',     String(useName));
+          formData.append('use_amount',   String(useAmount));
+          formData.append('credit_only',  String(creditOnly));
+          formData.append('tx_type_filter', txTypeFilter);
+          formData.append('use_date',     String(useDate));
+
+          response = await fetch('/analyze-from-api', { method: 'POST', body: formData });
+        } else {
+          // ── File Mode: standard PDF/HTML upload ──
+          document.getElementById('loading-text').textContent = 'در حال ارسال فایل‌ها به سرور و پردازش...';
+
+          const formData = new FormData();
+          formData.append('pdf_file',  pdfFile);
+          formData.append('excel_file', excelFile);
+          formData.append('use_tracking',   String(useTracking));
+          formData.append('use_name',       String(useName));
+          formData.append('use_amount',     String(useAmount));
+          formData.append('credit_only',    String(creditOnly));
+          formData.append('tx_type_filter', txTypeFilter);
+          formData.append('use_date',       String(useDate));
+
+          response = await fetch('/analyze', { method: 'POST', body: formData });
+        }
 
         if (!response.ok) {
           let errorText = await response.text();
-          try {
-            const errJson = JSON.parse(errorText);
-            if (errJson.detail) errorText = errJson.detail;
-          } catch (e) { }
+          try { const errJson = JSON.parse(errorText); if (errJson.detail) errorText = errJson.detail; } catch (e) {}
           throw new Error(errorText || response.statusText);
         }
 
         const data = await response.json();
-        if (!data.ok) throw new Error("خطای نامشخص از سرور");
+        if (!data.ok) throw new Error('خطای نامشخص از سرور');
 
         const results = data.results;
         allResults = results;
 
-        log(`✅ پردازش سمت سرور با موفقیت انجام شد.`);
-        log(`📋 کل ردیف‌های PDF: ${data.pdf_total}`);
-        log(`📊 کل تراکنش‌های بانک: ${data.bank_total}`);
+        log('✅ پردازش سمت سرور با موفقیت انجام شد.');
+        log('📋 کل ردیف‌های صورت‌حساب: ' + data.pdf_total);
+        log('📊 کل تراکنش‌های بانک: ' + data.bank_total);
         if (data.debug) {
-          log(`\nنمونه ردیف‌های PDF استخراج شده:`);
+          log('\nنمونه ردیف‌های صورت‌حساب استخراج شده:');
           data.debug.pdf_rows_sample.forEach(r => log(JSON.stringify(r)));
-          log(`\nنمونه تراکنش‌های بانک استخراج شده:`);
+          log('\nنمونه تراکنش‌های بانک استخراج شده:');
           data.debug.bank_txns_sample.forEach(t => log(JSON.stringify(t)));
         }
 
-        document.getElementById('s-total').textContent = results.length;
-        document.getElementById('s-found').textContent = data.found;
-        document.getElementById('s-review').textContent = data.review;
-        document.getElementById('s-duplicate').textContent = data.duplicate || 0;
+        document.getElementById('s-total').textContent    = results.length;
+        document.getElementById('s-found').textContent    = data.found;
+        document.getElementById('s-review').textContent   = data.review;
+        document.getElementById('s-duplicate').textContent= data.duplicate || 0;
         document.getElementById('s-multiple').textContent = data.multiple || 0;
         document.getElementById('s-notfound').textContent = data.not_found;
-        document.getElementById('s-bank').textContent = data.bank_total;
+        document.getElementById('s-bank').textContent     = data.bank_total;
 
         renderTable(results);
-        document.getElementById('loading').style.display = 'none';
-        document.getElementById('summary').style.display = 'block';
-        document.getElementById('results').style.display = 'block';
+        document.getElementById('loading').style.display  = 'none';
+        document.getElementById('summary').style.display  = 'block';
+        document.getElementById('results').style.display  = 'block';
 
       } catch (err) {
         document.getElementById('loading').style.display = 'none';
@@ -935,6 +1848,26 @@
       a.download = 'receipt_report_' + Date.now() + '.csv'; a.click();
     }
   </script>
-</body>
 
+  <!-- Persian DatePicker JS -->
+  <script src="/static/jquery-3.6.0.min.js"></script>
+  <script src="/static/persian-date.min.js"></script>
+  <script src="/static/persian-datepicker.min.js"></script>
+  <script>
+    $(document).ready(function() {
+      $('.pdate').persianDatepicker({
+        format: 'YYYY-MM-DD',
+        initialValue: false,
+        autoClose: true,
+        calendar: {
+          persian: {
+            locale: 'en'
+          }
+        },
+        onSelect: function() { setTimeout(updateBtn, 100); },
+        onClose:  function() { setTimeout(updateBtn, 100); }
+      });
+    });
+  </script>
+</body>
 </html>

@@ -19,9 +19,15 @@ from typing import Optional
 import uvicorn
 import pdfplumber
 import pandas as pd
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+import requests
+import urllib3
+import ssl
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
+from fastapi import FastAPI, UploadFile, File, Form, Body, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +35,7 @@ logger = logging.getLogger("receipt_checker")
 
 app = FastAPI(title="Receipt Checker")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Number utilities (Persian/Arabic/English digits + comma removal)
@@ -700,8 +707,8 @@ def match_receipts(
 
     # ── 1. Strict Rule: Only keep banking-related document types ──
     # Exclude gold trading (خرید طلا, فروش طلا, etc.) entirely.
-    # Only keep money transfers: ورود وجه نقد, خروج وجه نقد, واریز به حساب, برداشت از حساب, etc.
-    VALID_DOC_TYPES = re.compile(r"ورود وجه نقد|خروج وجه نقد|واریز|برداشت|حواله|انتقال|ساتنا|پایا|نقد|فیش|چک", re.IGNORECASE)
+    # Only keep money transfers: واریز نقد به بانک, خروج وجه نقد, واریز به حساب, برداشت از حساب, etc.
+    VALID_DOC_TYPES = re.compile(r"واریز نقد به بانک|خروج وجه نقد|واریز|برداشت|حواله|انتقال|ساتنا|پایا|نقد|فیش|چک", re.IGNORECASE)
     
     banking_rows = []
     for r in rows:
@@ -933,6 +940,168 @@ def match_receipts(
 async def index():
     html_path = Path(__file__).parent / "index.html"
     return html_path.read_text(encoding="utf-8")
+
+class LegacySSLAdapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        context = create_urllib3_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        # This allows older insecure ciphers that the local software might be using
+        context.set_ciphers('DEFAULT@SECLEVEL=0')
+        kwargs['ssl_context'] = context
+        return super(LegacySSLAdapter, self).init_poolmanager(*args, **kwargs)
+
+@app.post("/api/test-connection")
+async def test_api_connection(data: dict = Body(...)):
+    url = data.get("url")
+    method = data.get("method", "GET").upper()
+    headers = data.get("headers", {})
+    payload = data.get("payload")
+    
+    if not url:
+        raise HTTPException(status_code=400, detail="آدرس API وارد نشده است.")
+        
+    try:
+        # Suppress insecure request warnings
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        session = requests.Session()
+        session.mount('https://', LegacySSLAdapter())
+        
+        if method == "GET":
+            # payload is used as query params
+            response = session.get(url, headers=headers, params=payload, timeout=15, verify=False)
+        elif method == "POST":
+            # payload is used as json body
+            response = session.post(url, headers=headers, json=payload, timeout=15, verify=False)
+        else:
+            raise HTTPException(status_code=400, detail="متد نامعتبر است.")
+            
+        try:
+            resp_json = response.json()
+        except Exception:
+            resp_json = {"raw_text": response.text[:2000] + ("..." if len(response.text)>2000 else "")}
+            
+        return {
+            "ok": True,
+            "status_code": response.status_code,
+            "response": resp_json
+        }
+    except requests.exceptions.RequestException as e:
+        return {"ok": False, "error": str(e)}
+
+@app.post("/analyze-from-api")
+async def analyze_from_api(
+    excel_file:      UploadFile = File(...),
+    loaded_receipts: str        = Form(...),
+    selected_banks:  str        = Form(""),
+    credit_only:     str        = Form("true"),
+    use_tracking:    str        = Form("true"),
+    use_name:        str        = Form("true"),
+    use_amount:      str        = Form("true"),
+    tx_type_filter:  str        = Form("all"),
+    use_date:        str        = Form("false"),
+):
+    excel_bytes = await excel_file.read()
+
+    allowed_banks = [b.strip() for b in selected_banks.split(",") if b.strip()]
+    is_all_banks = "ALL" in allowed_banks
+
+    try:
+        asnad_raw = json.loads(loaded_receipts)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid loaded receipts JSON data")
+
+    if isinstance(asnad_raw, dict) and "ERROR" in asnad_raw:
+        raise HTTPException(status_code=400, detail=asnad_raw.get("ERROR", "خطا از ته حساب"))
+
+    # ── Normalize DoListAsnad → pdf_rows ─────────────────────────────────────────
+    # Each record has: Tarikh, NO (نوع سند), Mali (مالی), Sh_Factor, Sharh1, MCode, Bank_Name
+    pdf_rows = []
+    if isinstance(asnad_raw, dict):
+        for key, rec in asnad_raw.items():
+            if not isinstance(rec, dict):
+                continue
+            
+            # Filter by selected banks
+            raw_bank_name = rec.get("Name_Bank")
+            bank_name = str(raw_bank_name).strip() if raw_bank_name is not None else ""
+            
+            if not is_all_banks:
+                if not bank_name or bank_name == "None":
+                    continue
+                # Handle sub-string matches since UI uses "اقتصاد نوین" but API may send "بانک اقتصاد نوین"
+                matches_selected = any(b in bank_name or bank_name in b for b in allowed_banks)
+                if not matches_selected:
+                    continue
+
+            no_sanad = str(rec.get("NO", "")).strip()
+            mali = rec.get("Mali")
+            tarikh = str(rec.get("Tarikh", "")).strip()
+            sh = str(rec.get("Sh_Factor", "")).strip()
+            sharh = str(rec.get("Sharh1") or rec.get("Sharh2") or "").strip()
+            mcode = str(rec.get("MCode", "")).strip()
+
+            # Classify: if Mali > 0 = بستانکار, Mali < 0 = بدهکار
+            try:
+                mali_val = float(mali)
+            except (TypeError, ValueError):
+                mali_val = 0
+
+            doc_type = "بستانکار" if mali_val > 0 else "بدهکار"
+            amount = abs(mali_val)
+
+            # Extract 4-digit tracking codes and sender from Sharh
+            import re as _re
+            codes = _re.findall(r'\b\d{4}\b', sharh)
+            sender = sharh if sharh else mcode
+
+            pdf_rows.append({
+                "date":     tarikh,
+                "doc_num":  sh,
+                "doc_type": doc_type,
+                "amount":   amount,
+                "codes":    codes,
+                "sender":   sender,
+                "desc":     sharh,
+                "no":       no_sanad,
+            })
+
+    # ── Parse Excel ──────────────────────────────────────────────────────────────
+    try:
+        bank_txns = parse_excel(excel_bytes, excel_file.filename or "bank.xls")
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"خطا در خواندن فایل Excel: {str(e)}")
+
+    # ── Match ────────────────────────────────────────────────────────────────────
+    results = match_receipts(
+        pdf_rows,
+        bank_txns,
+        credit_only=credit_only.lower() == "true",
+        use_tracking=use_tracking.lower() == "true",
+        use_name=use_name.lower() == "true",
+        use_amount=use_amount.lower() == "true",
+        tx_type_filter=tx_type_filter,
+        use_date=use_date.lower() == "true",
+    )
+
+    found     = sum(1 for r in results if r["status"] == "exact")
+    review    = sum(1 for r in results if r["status"] == "review")
+    multiple  = sum(1 for r in results if r["status"] == "multiple")
+    duplicate = sum(1 for r in results if r["status"] == "duplicate")
+    not_found = sum(1 for r in results if r["status"] == "notfound")
+
+    return {
+        "ok": True,
+        "pdf_total":  len(pdf_rows),
+        "bank_total": len(bank_txns),
+        "found":      found,
+        "review":     review,
+        "multiple":   multiple,
+        "duplicate":  duplicate,
+        "not_found":  not_found,
+        "results":    results,
+    }
 
 @app.post("/analyze")
 async def analyze(
