@@ -104,17 +104,19 @@
       background: var(--bg2);
       border: 2px dashed var(--border);
       border-radius: var(--radius);
-      padding: 28px 20px;
+      padding: 32px 20px;
       text-align: center;
       cursor: pointer;
-      transition: border-color .25s, background .25s, transform .15s;
+      transition: all .3s cubic-bezier(0.25, 0.8, 0.25, 1);
       position: relative;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
     }
 
     .upload-card:hover {
-      border-color: var(--accent2);
-      background: var(--bg3);
-      transform: translateY(-2px);
+      border-color: var(--accent);
+      background: #f8fafc;
+      transform: translateY(-4px);
+      box-shadow: 0 12px 20px -8px rgba(79, 70, 229, 0.25), 0 4px 10px -3px rgba(0, 0, 0, 0.05);
     }
 
     .upload-card.loaded {
@@ -123,17 +125,12 @@
       background: rgba(34, 197, 94, .07);
     }
 
-    #file-source-panel {
-      position: relative;
+    #file-source-panel input[type=file] {
+      display: none;
     }
 
-    #file-source-panel input[type=file] {
-      position: absolute;
-      inset: 0;
-      opacity: 0;
-      cursor: pointer;
-      width: 100%;
-      height: 100%;
+    #excel-card input[type=file] {
+      display: none;
     }
 
     .upload-card .icon {
@@ -212,33 +209,54 @@
 
     .btn-check {
       width: 100%;
-      padding: 16px;
-      background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      padding: 18px;
+      background: linear-gradient(135deg, #4f46e5, #4338ca);
       color: #fff;
       border: none;
-      border-radius: var(--radius);
-      font-size: 1.05rem;
-      font-weight: 700;
+      border-radius: 16px;
+      font-size: 1.15rem;
+      font-weight: 800;
       font-family: inherit;
       cursor: pointer;
-      transition: opacity .2s, transform .15s, box-shadow .2s;
-      box-shadow: 0 4px 24px rgba(99, 102, 241, .35);
+      transition: all .2s ease-out;
+      box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.4), 0 2px 4px -1px rgba(79, 70, 229, 0.2);
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 10px;
+      gap: 12px;
       margin-bottom: 28px;
+      position: relative;
+    }
+
+    .btn-check::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 50%;
+      background: linear-gradient(to bottom, rgba(255,255,255,0.15), transparent);
+      border-radius: 16px 16px 0 0;
+      pointer-events: none;
     }
 
     .btn-check:hover:not(:disabled) {
-      opacity: .92;
-      transform: translateY(-1px);
-      box-shadow: 0 6px 30px rgba(99, 102, 241, .5);
+      transform: translateY(-2px);
+      box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.5), 0 4px 6px -2px rgba(79, 70, 229, 0.3);
+      filter: brightness(1.05);
+    }
+
+    .btn-check:active:not(:disabled) {
+      transform: translateY(1px);
+      box-shadow: 0 2px 4px -1px rgba(79, 70, 229, 0.4);
     }
 
     .btn-check:disabled {
-      opacity: .45;
+      background: #94a3b8;
+      box-shadow: none;
+      transform: none;
       cursor: not-allowed;
+    }
+
+    .btn-check:disabled::after {
+      display: none;
     }
 
     #loading {
@@ -668,50 +686,55 @@
       gap: 12px;
     }
     .btn-api {
-      background: #f7fee7;
-      color: #3f6212;
-      border: 1px solid #a3e635;
-      padding: 8px 16px;
-      font-size: 0.85rem;
-      font-weight: 600;
-      border-radius: 8px;
+      background: linear-gradient(135deg, #a3e635, #84cc16);
+      color: #1a2e05;
+      border: none;
+      padding: 9px 18px;
+      font-size: 0.88rem;
+      font-weight: 700;
+      border-radius: 10px;
       cursor: pointer;
       display: flex;
       align-items: center;
       gap: 8px;
-      transition: all 0.2s;
+      transition: all 0.25s;
+      box-shadow: 0 4px 10px rgba(132, 204, 22, 0.3);
     }
     .btn-api:hover {
-      background: #ecfccb;
-      box-shadow: 0 2px 4px rgba(163, 230, 53, 0.2);
+      background: linear-gradient(135deg, #bef264, #a3e635);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 14px rgba(132, 204, 22, 0.45);
     }
     .mode-toggle {
       display: flex;
       gap: 0;
-      border: 1.5px solid var(--accent);
-      border-radius: 10px;
-      overflow: hidden;
-      margin-bottom: 16px;
+      background: var(--bg3);
+      border-radius: 12px;
+      padding: 4px;
+      margin-bottom: 20px;
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.04);
     }
     .mode-toggle button {
       flex: 1;
       background: transparent;
       border: none;
-      padding: 9px 14px;
+      padding: 10px 14px;
       font-family: inherit;
-      font-size: 0.88rem;
-      font-weight: 600;
+      font-size: 0.95rem;
+      font-weight: 700;
       cursor: pointer;
-      color: var(--accent);
-      transition: all 0.2s;
+      color: var(--text2);
+      border-radius: 8px;
+      transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 6px;
+      gap: 8px;
     }
     .mode-toggle button.active {
-      background: var(--accent);
-      color: #fff;
+      background: #fff;
+      color: var(--accent);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
     }
     #api-source-panel { display: none; }
     #file-source-panel { display: block; }
@@ -768,20 +791,28 @@
     }
     .date-row input:focus { border-color: var(--accent); }
     .btn-load-customers {
-      margin-top: 10px;
+      margin-top: 14px;
       width: 100%;
-      background: linear-gradient(135deg, #6366f1, #818cf8);
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
       color: #fff;
       border: none;
-      border-radius: 8px;
-      padding: 10px;
+      border-radius: 10px;
+      padding: 12px;
       font-family: inherit;
-      font-size: 0.88rem;
-      font-weight: 600;
+      font-size: 1rem;
+      font-weight: 700;
       cursor: pointer;
-      transition: opacity 0.2s;
+      transition: all 0.25s;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
     }
-    .btn-load-customers:hover { opacity: 0.88; }
+    .btn-load-customers:hover { 
+      transform: translateY(-2px);
+      box-shadow: 0 8px 16px rgba(79, 70, 229, 0.45);
+    }
+    .btn-load-customers:active {
+      transform: translateY(0);
+      box-shadow: 0 2px 8px rgba(79, 70, 229, 0.3);
+    }
     .selected-customer-pill {
       display: none;
       align-items: center;
@@ -941,7 +972,7 @@
           </button>
           
           <!-- Fetch Receipts Button & Preview -->
-          <button class="btn-load-receipts" id="load-receipts-btn" onclick="fetchAndPreviewReceipts()" style="display:none;">
+          <button class="btn-load-customers" id="load-receipts-btn" onclick="fetchAndPreviewReceipts()" style="display:none; background: linear-gradient(135deg, #10b981, #059669); margin-top: 12px;">
             📥 ۲. دریافت اسناد واریزی مشتری
           </button>
           <div class="receipts-preview-box" id="receipts-preview-box"></div>
@@ -997,9 +1028,9 @@
 
     <div class="error-box" id="error-box"></div>
 
-    <div class="center-btn" style="margin-top: 24px;">
-      <button id="check-btn" class="btn" disabled>
-        <b>شروع پردازش و تطبیق</b>
+    <div class="center-btn" style="margin-top: 32px; padding: 0 10px;">
+      <button id="check-btn" class="btn-check" disabled>
+        شروع پردازش و تطبیق
       </button>
     </div>
 
@@ -1611,6 +1642,17 @@
         document.getElementById('pdf-fname').textContent = pdfFile.name;
       }
       updateBtn();
+    });
+    
+    // Wire up manual click handlers for the file panels
+    document.getElementById('file-source-panel').addEventListener('click', function(e) {
+      if (sourceMode === 'file') {
+        document.getElementById('pdf-file').click();
+      }
+    });
+
+    document.getElementById('excel-card').addEventListener('click', function(e) {
+      document.getElementById('excel-file').click();
     });
 
     document.getElementById('excel-file').addEventListener('change', function () {
