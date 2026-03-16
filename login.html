@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ورود به سیستم تطبیق فیش‌ها</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;900&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Vazirmatn', Tahoma, sans-serif;
+      background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+      color: #0f172a;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      direction: rtl;
+    }
+
+    .login-container {
+      width: 100%;
+      max-width: 420px;
+      padding: 20px;
+    }
+
+    .login-card {
+      background: #ffffff;
+      border-radius: 24px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 10px 10px -5px rgba(0, 0, 0, 0.02);
+      padding: 40px 32px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Decorative top accent */
+    .login-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 6px;
+      background: linear-gradient(90deg, #4f46e5, #8b5cf6, #3b82f6);
+    }
+
+    .logo-wrapper {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 24px;
+      background: linear-gradient(135deg, #6366f1, #818cf8);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      box-shadow: 0 8px 16px rgba(99, 102, 241, 0.25);
+      color: white;
+    }
+
+    .login-card h1 {
+      font-size: 1.5rem;
+      font-weight: 800;
+      text-align: center;
+      margin-bottom: 8px;
+      color: #0f172a;
+    }
+
+    .login-card p {
+      text-align: center;
+      font-size: 0.9rem;
+      color: #64748b;
+      margin-bottom: 32px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 0.88rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #334155;
+    }
+
+    .form-control {
+      width: 100%;
+      padding: 14px 16px;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 12px;
+      font-family: inherit;
+      font-size: 1rem;
+      outline: none;
+      transition: all 0.2s ease;
+      background: #f8fafc;
+      color: #0f172a;
+    }
+
+    .form-control:focus {
+      border-color: #6366f1;
+      background: #ffffff;
+      box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+    }
+
+    .form-control::placeholder {
+      color: #94a3b8;
+    }
+
+    .btn-login {
+      width: 100%;
+      padding: 16px;
+      margin-top: 12px;
+      background: linear-gradient(135deg, #4f46e5, #4338ca);
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 8px 16px -4px rgba(79, 70, 229, 0.4);
+      position: relative;
+    }
+
+    .btn-login::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 50%;
+      background: linear-gradient(to bottom, rgba(255,255,255,0.15), transparent);
+      border-radius: 12px 12px 0 0;
+      pointer-events: none;
+    }
+
+    .btn-login:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 20px -4px rgba(79, 70, 229, 0.5);
+    }
+
+    .btn-login:active {
+      transform: translateY(1px);
+      box-shadow: 0 4px 8px -2px rgba(79, 70, 229, 0.4);
+    }
+    
+    .btn-login:disabled {
+      background: #94a3b8;
+      transform: none;
+      box-shadow: none;
+      cursor: not-allowed;
+    }
+
+    .error-msg {
+      display: none;
+      margin-top: 16px;
+      padding: 12px;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      color: #dc2626;
+      font-size: 0.85rem;
+      text-align: center;
+      font-weight: 500;
+    }
+
+    /* Loading Spinner */
+    .spinner {
+      display: none;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="login-container">
+    <div class="login-card">
+      <div class="logo-wrapper">🏦</div>
+      <h1>ورود به پنل حسابداری</h1>
+      <p>سیستم هوشمند تطبیق اسناد بانکی</p>
+
+      <form id="loginForm" onsubmit="event.preventDefault(); doLogin();">
+        <div class="form-group">
+          <label for="username">نام کاربری</label>
+          <input type="text" id="username" class="form-control" placeholder="نام کاربری خود را وارد کنید" required autocomplete="username" dir="ltr" style="text-align: right;" />
+        </div>
+        
+        <div class="form-group">
+          <label for="password">رمز عبور</label>
+          <input type="password" id="password" class="form-control" placeholder="رمز عبور خود را وارد کنید" required autocomplete="current-password" dir="ltr" style="text-align: right;" />
+        </div>
+
+        <button type="submit" id="submitBtn" class="btn-login">
+          <span id="btnText">ورود به سیستم</span>
+          <div id="btnSpinner" class="spinner"></div>
+        </button>
+
+        <div id="errorMsg" class="error-msg">نام کاربری یا رمز عبور اشتباه است.</div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    async function doLogin() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value.trim();
+      
+      const btn = document.getElementById('submitBtn');
+      const text = document.getElementById('btnText');
+      const spinner = document.getElementById('btnSpinner');
+      const errorDiv = document.getElementById('errorMsg');
+
+      if(!username || !password) return;
+
+      btn.disabled = true;
+      text.style.display = 'none';
+      spinner.style.display = 'block';
+      errorDiv.style.display = 'none';
+
+      try {
+        const formData = new FormData();
+        formData.append('username', username);
+        formData.append('password', password);
+
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (res.ok) {
+          window.location.href = '/';
+        } else {
+          errorDiv.style.display = 'block';
+          errorDiv.textContent = 'شرمنده، نام کاربری یا رمز عبور اشتباه است.';
+        }
+      } catch (err) {
+        errorDiv.style.display = 'block';
+        errorDiv.textContent = 'خطا در ارتباط با سرور.';
+      } finally {
+        btn.disabled = false;
+        text.style.display = 'inline-block';
+        spinner.style.display = 'none';
+      }
+    }
+  </script>
+</body>
+</html>

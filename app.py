@@ -12,9 +12,16 @@ FastAPI backend + pdfplumber + pandas
 """
 
 from __future__ import annotations
-import io, re, json, logging
+import io, re, json, logging, sys
 from pathlib import Path
 from typing import Optional
+
+def get_base_path() -> Path:
+    if hasattr(sys, '_MEIPASS'):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent
+
+BASE_DIR = get_base_path()
 
 import uvicorn
 import pdfplumber
@@ -24,8 +31,9 @@ import urllib3
 import ssl
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
-from fastapi import FastAPI, UploadFile, File, Form, Body, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi import FastAPI, UploadFile, File, Form, Body, Request, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from bs4 import BeautifulSoup
@@ -35,7 +43,15 @@ logger = logging.getLogger("receipt_checker")
 
 app = FastAPI(title="Receipt Checker")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.add_middleware(SessionMiddleware, secret_key="super_secret_checkhesab_key_123")
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+ADMIN_USER = "admin"
+ADMIN_PASS = "admin"
+
+def check_auth(request: Request):
+    if not request.session.get("authenticated"):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Number utilities (Persian/Arabic/English digits + comma removal)
@@ -938,9 +954,30 @@ def match_receipts(
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
-    html_path = Path(__file__).parent / "index.html"
+async def index(request: Request):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/login", status_code=303)
+    html_path = BASE_DIR / "index.html"
     return html_path.read_text(encoding="utf-8")
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    if request.session.get("authenticated"):
+        return RedirectResponse(url="/")
+    html_path = BASE_DIR / "login.html"
+    return html_path.read_text(encoding="utf-8")
+
+@app.post("/api/login")
+async def do_login(request: Request, username: str = Form(...), password: str = Form(...)):
+    if username == ADMIN_USER and password == ADMIN_PASS:
+        request.session["authenticated"] = True
+        return JSONResponse(content={"ok": True})
+    return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid credentials"})
+
+@app.post("/api/logout")
+async def do_logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)
 
 class LegacySSLAdapter(HTTPAdapter):
     def init_poolmanager(self, *args, **kwargs):
@@ -953,7 +990,8 @@ class LegacySSLAdapter(HTTPAdapter):
         return super(LegacySSLAdapter, self).init_poolmanager(*args, **kwargs)
 
 @app.post("/api/test-connection")
-async def test_api_connection(data: dict = Body(...)):
+async def test_api_connection(request: Request, data: dict = Body(...)):
+    check_auth(request)
     url = data.get("url")
     method = data.get("method", "GET").upper()
     headers = data.get("headers", {})
@@ -993,6 +1031,7 @@ async def test_api_connection(data: dict = Body(...)):
 
 @app.post("/analyze-from-api")
 async def analyze_from_api(
+    request: Request,
     excel_file:      UploadFile = File(...),
     loaded_receipts: str        = Form(...),
     selected_banks:  str        = Form(""),
@@ -1003,6 +1042,7 @@ async def analyze_from_api(
     tx_type_filter:  str        = Form("all"),
     use_date:        str        = Form("false"),
 ):
+    check_auth(request)
     excel_bytes = await excel_file.read()
 
     allowed_banks = [b.strip() for b in selected_banks.split(",") if b.strip()]
