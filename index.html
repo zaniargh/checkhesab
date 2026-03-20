@@ -4,6 +4,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>سیستم تطبیق فیش‌های بانکی</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;900&display=swap"
@@ -992,13 +995,35 @@
         </div>
       </div>
       <div class="upload-card" id="excel-card">
-        <input type="file" id="excel-file" accept=".xls,.xlsx,.csv" />
-        <div class="icon">📊</div>
-        <h3>پرینت حساب بانکی (Excel)</h3>
-        <p>فایل Excel صادر شده از بانک را اینجا بکشید یا کلیک کنید</p>
-        <span class="badge" id="excel-badge">انتخاب نشده</span>
-        <div class="file-name" id="excel-fname"></div>
+        <!-- Step 1: Upload Excel to session -->
+        <div id="excel-upload-step">
+          <input type="file" id="excel-file" accept=".xls,.xlsx,.csv" style="display:none" onchange="uploadExcelToSession(this)" />
+          <div class="icon">📊</div>
+          <h3>پرینت حساب بانکی (Excel)</h3>
+          <p id="excel-upload-hint">یک بار اکسل بانک رو آپلود کنید — برای همه فایل‌های HTML ذخیره می‌ماند</p>
+          <span class="badge" id="excel-badge">انتخاب نشده</span>
+          <div class="file-name" id="excel-fname"></div>
+          <button id="excel-upload-btn" onclick="document.getElementById('excel-file').click()" style="margin-top:12px; padding:8px 18px; background:var(--accent); color:white; border:none; border-radius:8px; cursor:pointer; font-size:0.85rem; font-weight:600;">📁 آپلود فایل اکسل</button>
+          <div id="excel-upload-status" style="margin-top:8px;font-size:0.8rem;"></div>
+        </div>
       </div>
+    </div>
+    <!-- Session Status Panel -->
+    <div id="session-status-panel" style="display:none; margin:0 0 28px; padding:18px 20px; background:var(--card-bg); border-radius:14px; border:1px solid var(--border); direction:rtl;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:1.2rem;">📊</span>
+          <strong style="font-size:0.95rem;">فایل اکسل بانکی فعال:</strong>
+          <span id="ss-excel-name" style="font-size:0.9rem; color:var(--accent); font-weight:600;"></span>
+          <span id="ss-bank-rows" style="font-size:0.78rem; color:var(--text2);"></span>
+        </div>
+        <button onclick="clearExcelSession()" style="background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5; padding:6px 14px; border-radius:8px; cursor:pointer; font-size:0.8rem; font-weight:600; font-family:inherit;">🗑️ پاک کردن حافظه</button>
+      </div>
+      <div id="ss-html-files-section" style="display:none;">
+        <div style="font-size:0.82rem; color:var(--text2); margin-bottom:8px;">📂 فایل‌های HTML که تاکنون با این اکسل بررسی شده‌اند:</div>
+        <div id="ss-html-files-list" style="display:flex; flex-wrap:wrap; gap:8px;"></div>
+      </div>
+      <div id="ss-no-html-yet" style="font-size:0.82rem; color:var(--text2); margin-top:4px;">هنوز هیچ فایل HTML‌ای با این اکسل تطبیق داده نشده.</div>
     </div>
 
     <div class="options-bar">
@@ -1185,6 +1210,99 @@
     let sourceMode = 'file'; // 'file' or 'api'
     let allCustomers = [];   // raw list from API
     let selectedCustomer = null; // {Code, Name}
+    let excelReady = false;  // True when Excel is loaded in server session
+
+    // ── On page load: refresh session status (Excel may already be in memory) ──
+    window.addEventListener('load', () => refreshSessionStatus());
+
+    // ── Session Excel helpers ────────────────────────────────────────────────────
+    async function uploadExcelToSession(input) {
+      const file = input.files[0];
+      if (!file) return;
+      const statusEl = document.getElementById('excel-upload-status');
+      const btn = document.getElementById('excel-upload-btn');
+      statusEl.textContent = 'در حال آپلود...';
+      statusEl.style.color = 'var(--text2)';
+      btn.disabled = true;
+
+      const fd = new FormData();
+      fd.append('excel_file', file);
+      try {
+        const res = await fetch('/api/upload-excel', { method: 'POST', body: fd });
+        const d = await res.json();
+        if (!res.ok || !d.ok) throw new Error(d.detail || 'خطا در آپلود');
+        excelReady = true;
+        updateBtn(); // immediate check — pdfFile may already be selected
+        statusEl.innerHTML = `✅ بارگذاری شد: <strong>${d.filename}</strong> (${d.rows} تراکنش)`;
+        statusEl.style.color = '#10b981';
+        document.getElementById('excel-badge').textContent = '✅ آماده در حافظه';
+        document.getElementById('excel-fname').textContent = d.filename;
+        document.getElementById('excel-card').classList.add('loaded');
+        await refreshSessionStatus();
+      } catch (e) {
+        statusEl.textContent = '❌ ' + e.message;
+        statusEl.style.color = 'var(--danger)';
+      } finally {
+        btn.disabled = false;
+        updateBtn();
+      }
+    }
+
+    async function refreshSessionStatus() {
+      try {
+        const res = await fetch('/api/session-status');
+        if (!res.ok) return;
+        const d = await res.json();
+        const panel = document.getElementById('session-status-panel');
+        if (!d.has_excel) {
+          panel.style.display = 'none';
+          excelReady = false;
+          updateBtn();
+          return;
+        }
+        excelReady = true;
+        panel.style.display = 'block';
+        document.getElementById('ss-excel-name').textContent = d.filename;
+        document.getElementById('ss-bank-rows').textContent = `(${d.bank_rows} تراکنش بانکی)`;
+        // Render HTML files list
+        const filesEl = document.getElementById('ss-html-files-list');
+        const noYetEl = document.getElementById('ss-no-html-yet');
+        const sectionEl = document.getElementById('ss-html-files-section');
+        if (d.html_files && d.html_files.length > 0) {
+          sectionEl.style.display = 'block';
+          noYetEl.style.display = 'none';
+          filesEl.innerHTML = d.html_files.map((f, i) => `
+            <div style="padding:6px 12px; background:var(--bg2); border:1px solid var(--border); border-radius:8px; font-size:0.78rem; display:flex; align-items:center; gap:6px;">
+              <span style="color:var(--text2);">${i+1}.</span>
+              <span style="font-weight:600;">${f.name}</span>
+              <span style="color:#10b981;">(${f.matched} مطابقت از ${f.total} فیش)</span>
+            </div>`).join('');
+        } else {
+          sectionEl.style.display = 'none';
+          noYetEl.style.display = 'block';
+        }
+        // Sync badge+hint in the card
+        document.getElementById('excel-badge').textContent = '✅ آماده در حافظه';
+        document.getElementById('excel-fname').textContent = d.filename;
+        document.getElementById('excel-card').classList.add('loaded');
+        const statusEl = document.getElementById('excel-upload-status');
+        statusEl.innerHTML = `✅ بارگذاری شد: <strong>${d.filename}</strong> (${d.bank_rows} تراکنش)`;
+        statusEl.style.color = '#10b981';
+        updateBtn();
+      } catch (e) { /* silent */ }
+    }
+
+    async function clearExcelSession() {
+      if (!confirm('حافظه اکسل پاک شود؟ برای شروع مجدد باید فایل اکسل را دوباره آپلود کنید.')) return;
+      await fetch('/api/clear-session', { method: 'DELETE' });
+      excelReady = false;
+      document.getElementById('session-status-panel').style.display = 'none';
+      document.getElementById('excel-badge').textContent = 'انتخاب نشده';
+      document.getElementById('excel-fname').textContent = '';
+      document.getElementById('excel-card').classList.remove('loaded');
+      document.getElementById('excel-upload-status').textContent = '';
+      updateBtn();
+    }
 
     // ── Dual Mode ──────────────────────────────────────
     function switchMode(mode) {
@@ -1630,8 +1748,8 @@
     function showError(msg) { const e = document.getElementById('error-box'); e.textContent = msg; e.style.display = 'block'; }
     function clearError() { document.getElementById('error-box').style.display = 'none'; }
     function updateBtn() {
-      const fileReady = sourceMode === 'file' && pdfFile && excelFile;
-      const apiReady  = sourceMode === 'api'  && selectedCustomer && excelFile && getSelectedBanks().length > 0 && loadedReceiptsData !== null;
+      const fileReady = sourceMode === 'file' && pdfFile && excelReady;
+      const apiReady  = sourceMode === 'api'  && selectedCustomer && excelReady && getSelectedBanks().length > 0 && loadedReceiptsData !== null;
       document.getElementById('check-btn').disabled = !(fileReady || apiReady);
       
       // Update logic for fetch receipts button
@@ -1661,20 +1779,6 @@
       if (sourceMode === 'file') {
         document.getElementById('pdf-file').click();
       }
-    });
-
-    document.getElementById('excel-card').addEventListener('click', function(e) {
-      document.getElementById('excel-file').click();
-    });
-
-    document.getElementById('excel-file').addEventListener('change', function () {
-      excelFile = this.files[0];
-      if (excelFile) {
-        document.getElementById('excel-card').classList.add('loaded');
-        document.getElementById('excel-badge').textContent = '✅ آماده';
-        document.getElementById('excel-fname').textContent = excelFile.name;
-      }
-      updateBtn();
     });
 
     // ══════════════════════════════════════════════════════════════════════════════
@@ -1718,12 +1822,13 @@
 
           response = await fetch('/analyze-from-api', { method: 'POST', body: formData });
         } else {
-          // ── File Mode: standard PDF/HTML upload ──
+          // ── File Mode: standard PDF/HTML upload (Excel comes from session) ──
           document.getElementById('loading-text').textContent = 'در حال ارسال فایل‌ها به سرور و پردازش...';
+
+          if (!excelReady) throw new Error('ابتدا فایل اکسل بانکی را آپلود کنید.');
 
           const formData = new FormData();
           formData.append('pdf_file',  pdfFile);
-          formData.append('excel_file', excelFile);
           formData.append('use_tracking',   String(useTracking));
           formData.append('use_name',       String(useName));
           formData.append('use_amount',     String(useAmount));
@@ -1768,6 +1873,8 @@
         document.getElementById('loading').style.display  = 'none';
         document.getElementById('summary').style.display  = 'block';
         document.getElementById('results').style.display  = 'block';
+        // Refresh the session status panel to show the newly matched HTML file
+        if (sourceMode === 'file') await refreshSessionStatus();
 
       } catch (err) {
         document.getElementById('loading').style.display = 'none';

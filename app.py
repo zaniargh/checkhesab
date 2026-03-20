@@ -54,9 +54,77 @@ def check_auth(request: Request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Server-side Excel Session Storage (per user session)
+# ──────────────────────────────────────────────────────────────────────────────
+EXCEL_SESSIONS: dict = {}
+
+def _session_key(request: Request) -> str:
+    """Return a stable key for this user's session (uses session cookie value)."""
+    return request.session.get("session_id", "anonymous")
+
+def _ensure_session_id(request: Request):
+    """Create a session_id if not present."""
+    if "session_id" not in request.session:
+        import uuid
+        request.session["session_id"] = str(uuid.uuid4())
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Number utilities (Persian/Arabic/English digits + comma removal)
 # ──────────────────────────────────────────────────────────────────────────────
 FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Date utilities — Shamsi / Gregorian same-day or next-day check
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _parse_date_parts(date_str: str):
+    """Parse a date string like '1404/01/10' or '1404-01-10' or '14040110'
+    into (year, month, day) integers. Returns None if unparseable."""
+    if not date_str:
+        return None
+    s = str(date_str).translate(FA_DIGITS).strip()
+    # Try separator-based formats
+    for sep in ('/', '-', '.'):
+        if sep in s:
+            parts = s.split(sep)
+            if len(parts) == 3:
+                try:
+                    return (int(parts[0]), int(parts[1]), int(parts[2]))
+                except ValueError:
+                    pass
+    # Try compact 8-digit YMD
+    digits = re.sub(r'\D', '', s)
+    if len(digits) == 8:
+        try:
+            return (int(digits[:4]), int(digits[4:6]), int(digits[6:]))
+        except ValueError:
+            pass
+    return None
+
+def _date_ok(receipt_date_str: str, bank_date_str: str) -> bool:
+    """Return True if bank_date == receipt_date OR bank_date == receipt_date + 1 day.
+    Returns True when either date is missing/unparseable (non-blocking)."""
+    rd = _parse_date_parts(receipt_date_str)
+    bd = _parse_date_parts(bank_date_str)
+    if not rd or not bd:
+        return True  # not enough info — allow the match
+    # Must be same year/month (any reasonable month), just check day difference
+    # We'll use a simple arithmetic: convert to a scalar YYYYMMDD int
+    def scalar(t): return t[0] * 10000 + t[1] * 100 + t[2]
+    diff = scalar(bd) - scalar(rd)
+    # diff == 0: same day; diff == 1: next day  (ignores month-boundary edge cases — close enough for bank matching)
+    # Handle month boundary: if receipt is last day of month
+    # Simple approach: parse as Python date, but we avoid importing datetime for Shamsi
+    # Instead: allow diff == 0 or diff == 1 at same YYYYMM, OR allow day==1 of next month when receipt day >= 28
+    if rd[0] == bd[0] and rd[1] == bd[1]:
+        return bd[2] - rd[2] in (0, 1)
+    # Month boundary: receipt is last day of month, bank is 1st of next month
+    if rd[0] == bd[0] and bd[1] == rd[1] + 1 and bd[2] == 1:
+        return True
+    # Year boundary: receipt=12/29 or 12/30, bank=1/1 of next year
+    if bd[0] == rd[0] + 1 and bd[1] == 1 and bd[2] == 1 and rd[1] == 12:
+        return True
+    return False
 
 # Codes that identify the account holder themselves (not tracking codes)
 # These are extracted from the PDF header and should be excluded from per-row matching
@@ -66,11 +134,13 @@ def to_num(s: str) -> Optional[float]:
     """Convert a possibly-Persian number string to float. Returns None on failure."""
     if not s:
         return None
-    s_str = str(s).translate(FA_DIGITS).replace(",", "").replace("،", "").replace(" ", "").strip()
-    if not s_str:
+    s_str = str(s).translate(FA_DIGITS)
+    # Strip absolutely everything except digits and decimal point
+    clean_s = re.sub(r'[^\d.]', '', s_str)
+    if not clean_s:
         return None
     try:
-        return float(s_str)
+        return float(clean_s)
     except ValueError:
         return None
 
@@ -308,8 +378,9 @@ def parse_html(html_bytes: bytes) -> list[dict]:
 
                 desc_parts = [td.get_text(strip=True) for td in tds if td.get_text(strip=True)]
                 desc = " | ".join(desc_parts)
-                # Ignore header rows caught as td
-                if "شرح" in desc or "ردیف" in desc or not desc:
+                # Ignore header rows caught as td (only if "ردیف" is in the very first column or desc is empty)
+                first_col = desc_parts[0] if desc_parts else ""
+                if "ردیف" in first_col or not desc:
                     continue
 
                 credit_raw = tds[credit_idx].get_text(strip=True)
@@ -324,7 +395,9 @@ def parse_html(html_bytes: bytes) -> list[dict]:
                 if credit == 0 and debit == 0:
                     continue # Not a transaction row
                     
-                tx_key = (date_str, desc[:100], credit, debit)
+                # Improved duplicate detection: hash the ENTIRE row text, not just the first 100 chars, 
+                # because 17-column tables start with the same data for many rows.
+                tx_key = (date_str, desc, credit, debit)
                 if tx_key in seen_tx:
                     continue
                 seen_tx.add(tx_key)
@@ -420,13 +493,35 @@ def parse_desc(desc: str) -> tuple[list[str], str]:
     for m in re.finditer(r"\|\s*(\d{4,8})\s*$", desc_n):
         codes.add(m.group(1))
 
-    # Pattern 7: Multiple 4-8 digit numbers separated by slashes/dashes (like 0260/2502)
-    for m in re.finditer(r"\b\d{4,8}(?:\s*[/,-]\s*\d{4,8})+\b", desc_n):
+    # Pattern 7: Multiple 4-8 digit numbers separated by slashes/dashes (like 6678/2256 or 0260/2502)
+    for m in re.finditer(r"\b(\d{4,8})(?:\s*[/]\s*(\d{4,8}))+\b", desc_n):
         match_str = m.group(0)
-        # Exclude dates like 1404/12/04
-        if not re.search(r"\b\d{4}/\d{1,2}/\d{1,2}\b", match_str): 
-            for n in re.findall(r"\d{4,8}", match_str):
+        parts = re.findall(r"\d+", match_str)
+        # Only skip if this looks like a full Shamsi date (4-digit year / 1-2 digit month / 1-2 digit day)
+        # A real date has year >= 1380, month 1-12, day 1-31
+        if len(parts) == 3 and int(parts[0]) >= 1380 and 1 <= int(parts[1]) <= 12 and 1 <= int(parts[2]) <= 31:
+            continue  # This is a date like 1404/01/10 — skip it
+        # Otherwise extract all parts as codes
+        for n in parts:
+            if len(n) >= 4:
                 codes.add(n)
+
+    # Pattern 8: Broad fallback — any remaining isolated 4-8 digit number not yet extracted
+    # This catches codes like '4110' that appear in text like 'پایا - 4110 - نام'
+    # without any brackets/slashes. Applied LAST to avoid duplicate work.
+    already_found = set(codes)
+    for m in re.finditer(r'(?<![\d])(\d{4,8})(?![\d])', desc_n):
+        n = m.group(1)
+        if n in already_found:
+            continue
+        nint = int(n)
+        # Skip Shamsi year range (1380–1420)
+        if 1380 <= nint <= 1420:
+            continue
+        # Skip large numbers that are clearly amounts (>= 9 digits or round millions)
+        if len(n) >= 9:
+            continue
+        codes.add(n)
 
     sender = ""
     # Simplify regex to prevent catastrophic backtracking (ReDoS)
@@ -712,6 +807,7 @@ def match_receipts(
     use_amount: bool = True,
     tx_type_filter: str = "all",
     use_date: bool = False,
+    already_used_rows: set = None,
 ) -> list[dict]:
     """Match PDF receipt rows against bank transactions."""
 
@@ -721,33 +817,31 @@ def match_receipts(
             (not credit_only or (r.get("credit") and r["credit"] > 0))
             or r.get("codes")]  # Always include rows that have tracking codes
 
-    # ── 1. Strict Rule: Only keep banking-related document types ──
-    # Exclude gold trading (خرید طلا, فروش طلا, etc.) entirely.
-    # Only keep money transfers: واریز نقد به بانک, خروج وجه نقد, واریز به حساب, برداشت از حساب, etc.
-    VALID_DOC_TYPES = re.compile(r"واریز|واريز|خروج|برداشت|حواله|انتقال|ساتنا|پایا|نقد|فیش|چک", re.IGNORECASE)
-    
+    # ── 1. Strict Rule: Only keep banking-related rows ──
+    # Exclude gold/currency trading only if NO tracking code is present.
+    # If a row has a tracking code (≥4 digits), it's a verifiable bank transfer
+    # regardless of the description keyword — include it.
+    GOLD_TYPES  = re.compile(r"خرید\s*طلا|فروش\s*طلا|خرید\s*ارز|فروش\s*ارز|صرافی|سکه", re.IGNORECASE)
+    VALID_DOC_TYPES = re.compile(r"واریز|واريز|خروج|برداشت|حواله|انتقال|ساتنا|پایا|نقد|فیش|چک|دریافت", re.IGNORECASE)
+
     banking_rows = []
     for r in rows:
-        # Check if the description contains a valid banking document type or if it came from API (has 'no' field)
         desc_str = str(r.get("desc", "")) + " " + str(r.get("no", ""))
-        if VALID_DOC_TYPES.search(desc_str):
+        has_banking_kw = VALID_DOC_TYPES.search(desc_str)
+        has_gold_kw    = GOLD_TYPES.search(desc_str)
+        has_code       = any(len(c) >= 4 for c in r.get("codes", []))
+
+        if has_gold_kw and not has_code:
+            continue  # Pure gold/currency trade with no tracking code — skip
+        if has_banking_kw or has_code:
             banking_rows.append(r)
-            
+            # (rows with neither keyword nor code are quietly skipped)
+
     logger.info(f"Rows after filtering for valid banking types: {len(banking_rows)}")
 
-    # ── 2. Strict Rule: Only keep rows that actually have a tracking code ──
-    # The user specifically requested that ONLY rows with a 4-digit, 5-digit,
-    # or 6-digit tracking code should be checked in Excel.
-    valid_rows = []
-    for r in banking_rows:
-        valid_codes = [c for c in r.get("codes", []) if len(c) >= 4] 
-        if valid_codes:
-            r["codes"] = valid_codes
-            valid_rows.append(r)
-            
-    rows = valid_rows
+    rows = banking_rows
 
-    logger.info(f"PDF/HTML rows with valid tracking codes: {len(rows)}")
+    logger.info(f"PDF/HTML rows for matching: {len(rows)}")
 
     # Build bank lookup maps
     by_last4: dict[str, list] = {}
@@ -812,6 +906,8 @@ def match_receipts(
         matched = None
         status  = "not_found" # "exact", "review", "not_found"
         method  = ""
+        # Date is ALWAYS checked (user requirement: must be same day or next day)
+        receipt_date = r.get("date", "")
 
         # ── 1. Match by tracking code + amount (both are REQUIRED) ──
         # The user requirement: 4/5 digit code from HTML must match last 4/5 digits of the
@@ -834,24 +930,24 @@ def match_receipts(
                     if not cands:
                         continue
                     
-                    # REQUIRED: amount must also match (within 5% tolerance)
+                    # REQUIRED: amount MUST match EXACTLY
                     if amount:
-                        amount_cands = [c for c in cands if c.get("amount") and abs(c["amount"] - amount) < amount * 0.05]
+                        amount_cands = [c for c in cands if c.get("amount") and c["amount"] == amount]
+                        # REQUIRED: Date MUST match (same day or next day)
+                        amount_cands = [c for c in amount_cands if _date_ok(receipt_date, c.get("date", ""))]
                     else:
                         amount_cands = []
                     
-                    # If no amount match was found, skip this code - we require both
                     if not amount_cands:
                         continue
                     
                     # BONUS: also check sender name for disambiguation / confidence boost
                     sender_key = nrm(sender)
+                    name_cands = []
                     if sender_key and len(sender_key) >= 3:
                         name_cands = [c for c in amount_cands 
                                      if sender_key in nrm(c.get("sender", "")) 
                                      or nrm(c.get("sender", "")) in sender_key]
-                    else:
-                        name_cands = []
                     
                     # Pick the best candidates (name matches first, then any amount match)
                     working_cands = name_cands if name_cands else amount_cands
@@ -864,11 +960,16 @@ def match_receipts(
                         matched["all_matched_rows"] = [c.get("row_num") for c in working_cands if c.get("row_num")]
                     elif len(working_cands) == 1:
                         locked_cand = working_cands[0] if working_cands[0].get("is_locked") else None
-                        # Check if this match came via an IBAN suffix
                         is_iban_match = (scode, working_cands[0].get("row_num")) in iban_code_keys
                         iban_note = " (با شماره شبا منطبق است)" if is_iban_match else ""
+                        
                         if locked_cand:
-                            matched, method, status = locked_cand, f"کد {scode} + مبلغ{iban_note} (تکراری)", "exact"
+                            # It's an exact match, but this Excel row was ALREADY locked by a previous receipt
+                            matched = locked_cand
+                            status = "duplicate"
+                            # Tell the user clearly that this specific receipt is a duplicate of something already processed
+                            method = f"کد {scode} + مبلغ{iban_note} (تکراری در فایل اکسل)"
+                            matched["duplicate_lock_text"] = matched.get("lock_text", "قبلاً تطبیق شده")
                         else:
                             name_bonus = " + نام" if name_cands else ""
                             matched, method, status = working_cands[0], f"کد {scode} + مبلغ{name_bonus}{iban_note}", "exact"
@@ -880,46 +981,45 @@ def match_receipts(
                     break
 
         # ── 2. Match by sender name AND amount (Needs Manual Review) ──
-        # ONLY IF the PDF receipt actually had a tracking code (user requirement: don't match receipts without codes)
         if not matched and use_name and sender and amount and codes:
             skey = nrm(sender)
             cands = by_sender.get(skey, [])
             if cands:
-                # Find the ones that match amount strictly
-                amount_cands = [c for c in cands if c.get("amount") and abs(c["amount"] - amount) < amount * 0.05]
+                # Amount MUST match exactly + Mandatory date filter
+                amount_cands = [c for c in cands if c.get("amount") and c["amount"] == amount]
+                amount_cands = [c for c in amount_cands if _date_ok(receipt_date, c.get("date", ""))]
+                
                 if amount_cands:
                     locked_cand = next((c for c in amount_cands if c.get("is_locked")), None)
-                    matched = locked_cand if locked_cand else amount_cands[0]
-                    method, status = f"نام مشابه + مبلغ یکسان", "review"
+                    if locked_cand:
+                        matched = locked_cand
+                        status = "duplicate"
+                        method = "نام مشابه + مبلغ یکسان (تکراری)"
+                        matched["duplicate_lock_text"] = matched.get("lock_text", "قبلاً تطبیق شده")
+                    else:
+                        matched = amount_cands[0]
+                        method, status = f"نام مشابه + مبلغ یکسان", "review"
 
             # Partial name match
             if not matched and len(skey) >= 3:
                 for k, txs in by_sender.items():
                     if len(k) >= 3 and (k in skey or skey in k):
-                        amount_cands = [c for c in txs if c.get("amount") and abs(c["amount"] - amount) < amount * 0.05]
+                        amount_cands = [c for c in txs if c.get("amount") and c["amount"] == amount]
+                        amount_cands = [c for c in amount_cands if _date_ok(receipt_date, c.get("date", ""))]
+                        
                         if amount_cands:
                             locked_cand = next((c for c in amount_cands if c.get("is_locked")), None)
-                            matched = locked_cand if locked_cand else amount_cands[0]
-                            method, status = f"نام جزئی مشابه + مبلغ یکسان", "review"
+                            if locked_cand:
+                                matched = locked_cand
+                                status = "duplicate"
+                                method = "نام جزئی مشابه + مبلغ یکسان (تکراری)"
+                                matched["duplicate_lock_text"] = matched.get("lock_text", "قبلاً تطبیق شده")
+                            else:
+                                matched = amount_cands[0]
+                                method, status = f"نام جزئی مشابه + مبلغ یکسان", "review"
                             break
 
         # ── 3. Removed: Smart amount-only match ──
-        # The user requested that we NEVER match purely by amount if tracking code is missing.
-        
-        # ── 4. Override status if this matched row is already locked ──
-        if status != "multiple" and matched and matched.get("is_locked"):
-            # Check if locked by a DIFFERENT file
-            # lock_text is usually like "تطبیق شده - filename"
-            lock_text = matched.get("lock_text", "")
-            
-            # We want to identify if it's from another file:
-            status = "duplicate"
-            method = "تکراری (قبلاً تطبیق شده)"
-            if lock_text:
-                method = f"تکراری ({lock_text})"
-                # Also store the existing lock text to pass to front-end
-                matched["duplicate_lock_text"] = lock_text
-                
         # ── 5. Setup bank_rows array for multiple matches ──
         bank_rows_list = []
         if status == "multiple" and matched and "all_matched_rows" in matched:
@@ -946,6 +1046,14 @@ def match_receipts(
             "bank_sender":  matched.get("sender", "") if matched else "",
             "duplicate_lock_text": matched.get("duplicate_lock_text", "") if matched else "",
         })
+
+    # Cross-file duplicate detection: downgrade status for rows matched in previous HTMLs
+    if already_used_rows:
+        for r in results:
+            row_num = r.get("bank_row")
+            if row_num and row_num in already_used_rows and r["status"] in ("exact", "review"):
+                r["status"] = "duplicate"
+                r["match_method"] = r.get("match_method", "") + " — در فایل HTML قبلی تطبیق شده"
 
     return results
 
@@ -978,6 +1086,58 @@ async def do_login(request: Request, username: str = Form(...), password: str = 
 async def do_logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/login", status_code=303)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Session Excel Upload & Status
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.post("/api/upload-excel")
+async def upload_excel_to_session(
+    request: Request,
+    excel_file: UploadFile = File(...),
+):
+    check_auth(request)
+    _ensure_session_id(request)
+    sid = _session_key(request)
+    excel_bytes = await excel_file.read()
+    try:
+        bank_txns = parse_excel(excel_bytes, excel_file.filename or "bank.xls")
+    except Exception as e:
+        raise HTTPException(500, f"خطا در پردازش Excel: {e}")
+    EXCEL_SESSIONS[sid] = {
+        "bank_txns":       bank_txns,
+        "excel_bytes":     excel_bytes,
+        "excel_filename":  excel_file.filename or "bank.xls",
+        "matched_row_nums": set(),
+        "html_files":      [],
+    }
+    return JSONResponse({"ok": True, "filename": excel_file.filename, "rows": len(bank_txns)})
+
+
+@app.get("/api/session-status")
+async def session_status(request: Request):
+    check_auth(request)
+    sid = _session_key(request)
+    sess = EXCEL_SESSIONS.get(sid)
+    if not sess:
+        return JSONResponse({"ok": True, "has_excel": False})
+    return JSONResponse({
+        "ok":           True,
+        "has_excel":    True,
+        "filename":     sess["excel_filename"],
+        "bank_rows":    len(sess["bank_txns"]),
+        "matched_count": len(sess["matched_row_nums"]),
+        "html_files":   sess["html_files"],
+    })
+
+
+@app.delete("/api/clear-session")
+async def clear_session(request: Request):
+    check_auth(request)
+    sid = _session_key(request)
+    if sid in EXCEL_SESSIONS:
+        del EXCEL_SESSIONS[sid]
+    return JSONResponse({"ok": True})
 
 class LegacySSLAdapter(HTTPAdapter):
     def init_poolmanager(self, *args, **kwargs):
@@ -1151,8 +1311,8 @@ async def analyze_from_api(
 
 @app.post("/analyze")
 async def analyze(
+    request:     Request,
     pdf_file:    UploadFile = File(...),
-    excel_file:  UploadFile = File(...),
     credit_only: str        = Form("true"),
     use_tracking:str        = Form("true"),
     use_name:    str        = Form("true"),
@@ -1160,8 +1320,18 @@ async def analyze(
     tx_type_filter: str     = Form("all"),
     use_date:    str        = Form("false"),
 ):
+    check_auth(request)
+    sid = _session_key(request)
+    sess = EXCEL_SESSIONS.get(sid)
+    if not sess:
+        raise HTTPException(400, "فایل اکسل بارگذاری نشده. ابتدا فایل حساب بانکی (اکسل) را آپلود کنید.")
+
+    bank_txns    = sess["bank_txns"]
+    excel_bytes  = sess["excel_bytes"]
+    excel_filename = sess["excel_filename"]
+    already_used = sess["matched_row_nums"]
+
     pdf_bytes   = await pdf_file.read()
-    excel_bytes = await excel_file.read()
 
     filename = (pdf_file.filename or "").lower()
     is_html = filename.endswith(".html") or filename.endswith(".htm")
@@ -1175,12 +1345,6 @@ async def analyze(
         logger.exception(f"Exception parsing {filename}")
         raise HTTPException(500, f"خطا در پردازش فایل: {e}")
 
-    try:
-        bank_txns = parse_excel(excel_bytes, excel_file.filename or "bank.xls")
-    except Exception as e:
-        logger.exception("Excel parse error")
-        raise HTTPException(500, f"خطا در پردازش Excel: {e}")
-
     results = match_receipts(
         pdf_rows, bank_txns,
         credit_only    = credit_only.lower() == "true",
@@ -1189,7 +1353,24 @@ async def analyze(
         use_amount     = use_amount.lower()   == "true",
         tx_type_filter = tx_type_filter.lower(),
         use_date       = use_date.lower()     == "true",
+        already_used_rows = already_used,
     )
+
+    # Update session: add newly matched row numbers + record this HTML file
+    new_matched = set()
+    for r in results:
+        if r["status"] in ("exact", "review"):
+            if r.get("bank_row"):
+                new_matched.add(r["bank_row"])
+        elif r["status"] == "multiple":
+            for br in (r.get("bank_rows") or []):
+                new_matched.add(br)
+    sess["matched_row_nums"].update(new_matched)
+    sess["html_files"].append({
+        "name":    pdf_file.filename or "ناشناخته",
+        "matched": len(new_matched),
+        "total":   len(pdf_rows),
+    })
 
     # ── Excel Locking Generation ──
     try:
@@ -1273,9 +1454,7 @@ async def analyze(
 
             # 3. Save finalized colored workbook back to disk, replacing original if possible
             # Determine path (assuming script is running locally next to files)
-            original_filename = excel_file.filename
-            if not original_filename:
-                original_filename = "bank.xls"
+            original_filename = excel_filename
                 
             # If the original was .xls, we save as .xlsx
             base_name, _ = os.path.splitext(original_filename)

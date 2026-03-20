@@ -1,9 +1,0 @@
-fastapi
-uvicorn
-python-multipart
-itsdangerous
-pdfplumber
-pandas
-openpyxl
-beautifulsoup4
-requests
