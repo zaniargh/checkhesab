@@ -15,6 +15,7 @@ from __future__ import annotations
 import io, re, json, logging, sys
 from pathlib import Path
 from typing import Optional
+from difflib import SequenceMatcher
 
 def get_base_path() -> Path:
     if hasattr(sys, '_MEIPASS'):
@@ -1043,8 +1044,10 @@ def match_receipts(
                     break
 
         # ── 2. Match by sender name AND amount (Needs Manual Review) ──
-        if not matched and use_name and sender and amount and codes:
+        if not matched and use_name and sender and amount:
             skey = nrm(sender)
+            
+            # First, check exact matches (or fully contained strings)
             cands = by_sender.get(skey, [])
             if cands:
                 # Amount MUST match exactly + Mandatory date filter
@@ -1062,24 +1065,34 @@ def match_receipts(
                         matched = amount_cands[0]
                         method, status = f"نام مشابه + مبلغ یکسان", "review"
 
-            # Partial name match
+            # Partial/Fuzzy name match (at least 50% similarity, and amount matches EXACTLY)
             if not matched and len(skey) >= 3:
-                for k, txs in by_sender.items():
-                    if len(k) >= 3 and (k in skey or skey in k):
-                        amount_cands = [c for c in txs if c.get("amount") and c["amount"] == amount]
-                        amount_cands = [c for c in amount_cands if _date_ok(receipt_date, c.get("date", ""))]
-                        
-                        if amount_cands:
-                            locked_cand = next((c for c in amount_cands if c.get("is_locked")), None)
-                            if locked_cand:
-                                matched = locked_cand
-                                status = "duplicate"
-                                method = "نام جزئی مشابه + مبلغ یکسان (تکراری)"
-                                matched["duplicate_lock_text"] = matched.get("lock_text", "قبلاً تطبیق شده")
-                            else:
-                                matched = amount_cands[0]
-                                method, status = f"نام جزئی مشابه + مبلغ یکسان", "review"
-                            break
+                # To maximize performance, initially find any Excel txns with exactly matching amount + date
+                target_amount_cands = []
+                for _, t in enumerate(bank_txns):
+                    if t.get("amount") == amount and _date_ok(receipt_date, t.get("date", "")):
+                        target_amount_cands.append(t)
+                
+                # Check fuzzy match against the sender/desc fields of these matching amount transactions
+                for c in target_amount_cands:
+                    excel_sender = nrm(c.get("sender", ""))
+                    excel_desc = nrm(c.get("desc", ""))
+                    
+                    # Compute ratio
+                    ratio1 = SequenceMatcher(None, skey, excel_sender).ratio() if excel_sender else 0
+                    ratio2 = SequenceMatcher(None, skey, excel_desc).ratio() if excel_desc else 0
+                    
+                    if ratio1 >= 0.5 or ratio2 >= 0.5 or (len(excel_sender) >= 3 and (excel_sender in skey or skey in excel_sender)):
+                        locked_cand = c if c.get("is_locked") else None
+                        if locked_cand:
+                            matched = locked_cand
+                            status = "duplicate"
+                            method = "نام جزئی مشابه + مبلغ یکسان (تکراری)"
+                            matched["duplicate_lock_text"] = matched.get("lock_text", "قبلاً تطبیق شده")
+                        else:
+                            matched = c
+                            method, status = f"نام جزئی مشابه + مبلغ یکسان", "review"
+                        break
 
         # ── 3. Removed: Smart amount-only match ──
         # ── 5. Setup bank_rows array for multiple matches ──
