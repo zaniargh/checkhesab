@@ -312,7 +312,7 @@ def parse_pdf(pdf_bytes: bytes) -> list[dict]:
         for r in rows_out:
             for c in r.get("codes", []):
                 code_freq[c] = code_freq.get(c, 0) + 1
-        threshold = len(rows_out) * 0.1
+        threshold = max(5, len(rows_out) * 0.1)
         auto_owner_codes = {c for c, cnt in code_freq.items() if cnt > threshold}
         if auto_owner_codes:
             logger.info(f"Auto-detected owner codes (filtered from tracking): {auto_owner_codes}")
@@ -325,11 +325,29 @@ def parse_pdf(pdf_bytes: bytes) -> list[dict]:
 def parse_html(html_bytes: bytes) -> list[dict]:
     """Parse HTML statement into the standard dict format."""
     
-    # Try decoding as standard UTF-8, fallback to cp1256 (Windows-1256) used by older Iranian accounting tools
+    # --- Smart charset detection ---
+    # Many Iranian accounting tools (e.g. Tahesab) save HTML with windows-1256.
+    # We must detect the encoding from the <meta charset> tag BEFORE decoding,
+    # because windows-1256 bytes are valid latin-1 and won't raise UnicodeDecodeError
+    # when decoded as UTF-8 — they just silently produce ??? for all Persian text.
+    import re as _re
+    # Step 1: try to sniff charset from raw bytes using a quick latin-1 decode
+    _sniff = html_bytes[:2000].decode('latin-1', errors='replace')
+    _charset_match = _re.search(r'charset\s*=\s*["\']?\s*([\w-]+)', _sniff, _re.IGNORECASE)
+    _detected_enc = _charset_match.group(1).strip().lower() if _charset_match else 'utf-8'
+    # Normalize common aliases
+    if _detected_enc in ('windows-1256', 'cp1256', '1256', 'arabic'):
+        _detected_enc = 'cp1256'
+    elif _detected_enc in ('windows-1252', 'cp1252', 'iso-8859-1', 'latin-1'):
+        _detected_enc = 'cp1252'
+    # Step 2: decode with the detected encoding, fallback to utf-8 then cp1256
     try:
-        html_text = html_bytes.decode('utf-8')
-    except UnicodeDecodeError:
-        html_text = html_bytes.decode('cp1256', errors='replace')
+        html_text = html_bytes.decode(_detected_enc)
+    except (UnicodeDecodeError, LookupError):
+        try:
+            html_text = html_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            html_text = html_bytes.decode('cp1256', errors='replace')
         
     soup = BeautifulSoup(html_text, "html.parser")
     rows_out = []
@@ -348,22 +366,34 @@ def parse_html(html_bytes: bytes) -> list[dict]:
         
         # Detect column indices from the FIRST header row (not flattened)
         header_cells = rows_all[0].find_all(["th", "td"])
-        desc_idx = credit_idx = debit_idx = date_idx = -1
+        desc_indices = []
+        credit_idx = -1
+        debit_idx = date_idx = doc_num_idx = account_name_idx = tracking_idx = -1
         for ci, cell in enumerate(header_cells):
-            text = cell.get_text(strip=True)
-            if "شرح" in text:
-                desc_idx = ci
-            elif "بستانکار" in text and "مالي" in text:
+            # Normalize Arabic Yeh/Kaf to Persian so our "in" checks work reliably
+            text = cell.get_text(strip=True).replace('ي', 'ی').replace('ك', 'ک')
+            if "شرح" in text or "نوع" in text:
+                desc_indices.append(ci)
+            elif "بستانکار" in text and "مالی" in text:
                 credit_idx = ci
-            elif "بدهکار" in text and "مالي" in text:
+            elif "بدهکار" in text and "مالی" in text:
                 debit_idx = ci
-            elif "تاریخ" in text or "تاريخ" in text:
-                date_idx = ci
+            elif "تاریخ" in text:
+                if date_idx == -1:
+                    date_idx = ci          # Take first تاریخ column as default
+                if "عملیات" in text:
+                    date_idx = ci          # Override with تاریخ عملیات if found
+            elif "نام حساب" in text or "نامحساب" in text or "صاحب حساب" in text:
+                account_name_idx = ci
+            elif ("شماره" in text and "سند" in text) or "سماره" in text:
+                doc_num_idx = ci
+            elif "رهگیری" in text or "رسید" in text:
+                tracking_idx = ci
         
-        # Fallbacks if بستانکار مالي / بدهکار مالي not matched
+        # Fallbacks if بستانکار مالی / بدهکار مالی not matched
         if credit_idx == -1 or debit_idx == -1:
             for ci, cell in enumerate(header_cells):
-                text = cell.get_text(strip=True)
+                text = cell.get_text(strip=True).replace('ي', 'ی').replace('ك', 'ک')
                 if "بستانکار" in text and credit_idx == -1:
                     credit_idx = ci
                 elif "بدهکار" in text and debit_idx == -1:
@@ -376,10 +406,27 @@ def parse_html(html_bytes: bytes) -> list[dict]:
                 if not tds or len(tds) <= credit_idx:
                     continue
 
-                desc_parts = [td.get_text(strip=True) for td in tds if td.get_text(strip=True)]
-                desc = " | ".join(desc_parts)
-                # Ignore header rows caught as td (only if "ردیف" is in the very first column or desc is empty)
-                first_col = desc_parts[0] if desc_parts else ""
+                # Build desc ONLY from the شرح column if it has a dedicated column,
+                # otherwise join all cells EXCEPT the structured columns (credit, debit, date, account_name, doc_num).
+                # This prevents account holder name / amounts from polluting the sender extraction.
+                excluded_cols = {i for i in [credit_idx, debit_idx, date_idx, account_name_idx, doc_num_idx] if i != -1}
+                
+                if desc_idx != -1 and len(tds) > desc_idx:
+                    desc_text = tds[desc_idx].get_text(strip=True)
+                else:
+                    desc_parts_filtered = [tds[ci].get_text(strip=True) for ci in range(len(tds))
+                                           if ci not in excluded_cols and tds[ci].get_text(strip=True)]
+                    desc_text = " | ".join(desc_parts_filtered)
+
+                # Append tracking code column explicitly so Regex can find the 4-digit code
+                if tracking_idx != -1 and len(tds) > tracking_idx and tracking_idx not in (desc_idx,):
+                    tk_text = tds[tracking_idx].get_text(strip=True)
+                    if tk_text and tk_text != "-":
+                        desc_text += f" - {tk_text}"
+                
+                desc = desc_text.replace('ي', 'ی').replace('ك', 'ک')
+
+                first_col = tds[0].get_text(strip=True) if tds else ""
                 if "ردیف" in first_col or not desc:
                     continue
 
@@ -388,6 +435,9 @@ def parse_html(html_bytes: bytes) -> list[dict]:
                 date_str   = tds[date_idx].get_text(strip=True)   if date_idx  != -1 and len(tds) > date_idx   else ""
                 # Normalize date: remove leading day-letter prefix (like 'د ', 'ش ', etc.)
                 date_str = re.sub(r'^[آابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی]\s+', '', date_str).strip()
+                
+                # Extract document number from dedicated column if available
+                doc_num_str = tds[doc_num_idx].get_text(strip=True) if doc_num_idx != -1 and len(tds) > doc_num_idx else ""
                 
                 credit = to_num(credit_raw) or 0
                 debit = to_num(debit_raw) or 0
@@ -402,21 +452,28 @@ def parse_html(html_bytes: bytes) -> list[dict]:
                     continue
                 seen_tx.add(tx_key)
                     
-                codes, sender = parse_desc(desc)
+                codes, parsed_sender = parse_desc(desc)
+                
+                account_name = ""
+                if account_name_idx != -1 and len(tds) > account_name_idx:
+                    account_name = tds[account_name_idx].get_text(strip=True).replace('ي', 'ی').replace('ك', 'ک')
+                    # Clean up random prefixes like "13 " or "13-"
+                    account_name = _re.sub(r'^\d+[\s\-]+', '', account_name).strip()
                 
                 rows_out.append({
-                    "page":        1,
-                    "date":        date_str,
-                    "doc_num":     "",
-                    "desc":        desc[:200],
-                    "credit":      credit,
-                    "debit":       debit,
-                    "credit_raw":  credit_raw,
-                    "debit_raw":   debit_raw,
-                    "codes":       codes,
-                    "sender":      sender,
-                    "doc_type":    "بستانکار" if credit > 0 else "بدهکار",
-                    "amount":      credit if credit > 0 else debit,
+                    "page":          1,
+                    "date":          date_str,
+                    "doc_num":       doc_num_str,
+                    "desc":          desc[:200],
+                    "credit":        credit,
+                    "debit":         debit,
+                    "credit_raw":    credit_raw,
+                    "debit_raw":     debit_raw,
+                    "codes":         codes,
+                    "sender":        parsed_sender,   # person who sent the money (from description)
+                    "customer_name": account_name,   # account holder name (نام حساب)
+                    "doc_type":      "بستانکار" if credit > 0 else "بدهکار",
+                    "amount":        credit if credit > 0 else debit,
                 })
             # Do not break here! Process all tables because HTML might be paginated
             # with multiple transaction tables.
@@ -430,7 +487,7 @@ def parse_html(html_bytes: bytes) -> list[dict]:
         for r in rows_out:
             for c in r.get("codes", []):
                 code_freq[c] = code_freq.get(c, 0) + 1
-        threshold = len(rows_out) * 0.1
+        threshold = max(5, len(rows_out) * 0.1)
         auto_owner_codes = {c for c, cnt in code_freq.items() if cnt > threshold}
         if auto_owner_codes:
             global ACCOUNT_HOLDER_CODES
@@ -460,15 +517,15 @@ def parse_desc(desc: str) -> tuple[list[str], str]:
 
     # Pattern 1: فارسی/XXXX  — tracking code after sender name + slash
     # Pattern 1a: فارسی/XXXX — sender name + slash + tracking code
-    for m in re.finditer(r"[\u0600-\u06FF]+\s*/\s*(\d{4,8})\b", desc_n):
+    for m in re.finditer(r"[\u0600-\u06FF]+\s*/\s*(\d{4,15})\b", desc_n):
         codes.add(m.group(1))
 
     # Pattern 1b: XXXX/فارسی  — tracking code before sender name + slash
-    for m in re.finditer(r"\b(\d{4})\s*/\s*[\u0600-\u06FF]+", desc_n):
+    for m in re.finditer(r"\b(\d{4,15})\s*/\s*[\u0600-\u06FF]+", desc_n):
         codes.add(m.group(1))
 
     # Pattern 2: NNNN[اسم فارسی] — 4-digit code BEFORE a bracket (e.g. 8842[غفاری])
-    for m in re.finditer(r"(?<!\d)(\d{4})(?!\d)\s*\[", desc_n):
+    for m in re.finditer(r"(?<!\d)(\d{4,15})(?!\d)\s*\[", desc_n):
         codes.add(m.group(1))
 
     # Pattern 3: inside brackets [بانک،NNNNN]
@@ -482,19 +539,19 @@ def parse_desc(desc: str) -> tuple[list[str], str]:
     # Pattern 4: code AFTER closing bracket ] (PyMuPDF reverses RTL brackets)
     # Format: "[ بانک منشادی ، ]3030," → code is 3030 (right after ])
     # Only match if the bracket content is long (bank name), NOT short person names
-    for m in re.finditer(r"\[([^\]]{8,})\]\s*(\d{4,8})\b", desc_n):
+    for m in re.finditer(r"\[([^\]]{8,})\]\s*(\d{4,15})\b", desc_n):
         codes.add(m.group(2))
 
-    # Pattern 5: Isolated 4 to 8 digit numbers surrounded by | spaces |
-    for m in re.finditer(r"\|\s*(\d{4,8})\s*(?=\|)", desc_n):
+    # Pattern 5: Isolated numbers surrounded by | spaces |
+    for m in re.finditer(r"\|\s*(\d{4,15})\s*(?=\|)", desc_n):
         codes.add(m.group(1))
 
-    # Pattern 6: Isolated 4 to 8 digit numbers at the end of the line
-    for m in re.finditer(r"\|\s*(\d{4,8})\s*$", desc_n):
+    # Pattern 6: Isolated numbers at the end of the line (especially added from tracking col via ' - ')
+    for m in re.finditer(r"(?:\||-)\s*(\d{4,15})\s*$", desc_n):
         codes.add(m.group(1))
 
-    # Pattern 7: Multiple 4-8 digit numbers separated by slashes/dashes (like 6678/2256 or 0260/2502)
-    for m in re.finditer(r"\b(\d{4,8})(?:\s*[/]\s*(\d{4,8}))+\b", desc_n):
+    # Pattern 7: Multiple 4-15 digit numbers separated by slashes/dashes (like 2356/8765/13291)
+    for m in re.finditer(r"(?<!\d)(\d{4,15})(?:\s*[/\\-]\s*(\d{4,15}))+(?!\d)", desc_n):
         match_str = m.group(0)
         parts = re.findall(r"\d+", match_str)
         # Only skip if this looks like a full Shamsi date (4-digit year / 1-2 digit month / 1-2 digit day)
@@ -506,11 +563,11 @@ def parse_desc(desc: str) -> tuple[list[str], str]:
             if len(n) >= 4:
                 codes.add(n)
 
-    # Pattern 8: Broad fallback — any remaining isolated 4-8 digit number not yet extracted
+    # Pattern 8: Broad fallback — any remaining isolated 4-15 digit number not yet extracted
     # This catches codes like '4110' that appear in text like 'پایا - 4110 - نام'
     # without any brackets/slashes. Applied LAST to avoid duplicate work.
     already_found = set(codes)
-    for m in re.finditer(r'(?<![\d])(\d{4,8})(?![\d])', desc_n):
+    for m in re.finditer(r'(?<![\d])(\d{4,15})(?![\d])', desc_n):
         n = m.group(1)
         if n in already_found:
             continue
@@ -518,9 +575,14 @@ def parse_desc(desc: str) -> tuple[list[str], str]:
         # Skip Shamsi year range (1380–1420)
         if 1380 <= nint <= 1420:
             continue
-        # Skip large numbers that are clearly amounts (>= 9 digits or round millions)
-        if len(n) >= 9:
+        # Skip Iranian mobile numbers (11 digits starting with 09)
+        if len(n) == 11 and n.startswith('09'):
             continue
+        # Skip large numbers that are clearly amounts (>= 12 digits or round millions)
+        # Wait, if tracking code is 12 digits, it's valid. But amount > 999 million is also 10 digits.
+        # Bank tracking columns (Pattern 6 explicit checks) have already caught explicit tracking codes.
+        # Fallback shouldn't loosely capture 9+ digits unless we are sure it's tracking. 
+        # But to be safe, we allow up to 15 digits here if not mobile or date.
         codes.add(n)
 
     sender = ""

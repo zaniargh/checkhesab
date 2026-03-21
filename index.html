@@ -558,6 +558,22 @@
       margin-bottom: 20px;
     }
 
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+    th.sortable:hover {
+      background: rgba(99, 102, 241, 0.12);
+    }
+    .sort-arrow {
+      display: inline-block;
+      font-size: 0.7rem;
+      color: var(--primary);
+      min-width: 12px;
+    }
+
     .col-type {
       font-size: .72rem;
       padding: 2px 7px;
@@ -1180,16 +1196,17 @@
       <div class="table-wrap">
         <table>
           <thead>
-            <tr>
-              <th style="width:38px">ردیف</th>
-              <th>تاریخ</th>
-              <th>شماره سندPDF</th>
-              <th>نوع</th>
-              <th>مبلغ (ریال)</th>
-              <th>کد ۴ رقمی / شناسه</th>
-              <th>نام واریزکننده / شرح</th>
-              <th>وضعیت تطبیق</th>
-              <th>ردیف اکسل بانک</th>
+            <tr id="sort-header-row">
+              <th style="width:38px">#</th>
+              <th onclick="sortTable('date')" class="sortable">تاریخ <span class="sort-arrow" id="arr-date"></span></th>
+              <th onclick="sortTable('sender')" class="sortable">نام مشتری <span class="sort-arrow" id="arr-sender"></span></th>
+              <th onclick="sortTable('doc_num')" class="sortable">شماره سند <span class="sort-arrow" id="arr-doc_num"></span></th>
+              <th onclick="sortTable('doc_type')" class="sortable">نوع <span class="sort-arrow" id="arr-doc_type"></span></th>
+              <th onclick="sortTable('amount')" class="sortable">مبلغ (ریال) <span class="sort-arrow" id="arr-amount"></span></th>
+              <th onclick="sortTable('codes')" class="sortable">کد ۴ رقمی <span class="sort-arrow" id="arr-codes"></span></th>
+              <th>شرح</th>
+              <th onclick="sortTable('status')" class="sortable">وضعیت <span class="sort-arrow" id="arr-status"></span></th>
+              <th onclick="sortTable('bank_row')" class="sortable">ردیف اکسل <span class="sort-arrow" id="arr-bank_row"></span></th>
             </tr>
           </thead>
           <tbody id="result-body"></tbody>
@@ -1936,17 +1953,74 @@
         }
 
         tr.innerHTML = `
-      <td style="color:var(--text2);font-size:.75rem">${r.idx || i + 1}</td>
-      <td>${r.date || '—'}</td>
-      <td class="tracking">${r.doc_num || '—'}</td>
+      <td style="color:var(--text2);font-size:.75rem;text-align:center">${r.idx || i + 1}</td>
+      <td style="white-space:nowrap;font-size:.85rem">${r.date || '—'}</td>
+      <td style="font-weight:600;color:var(--primary);font-size:.85rem">${r.customer_name || '—'}</td>
+      <td class="tracking" style="font-size:.78rem;color:var(--text2)">${r.doc_num || '—'}</td>
       <td>${typeTag}</td>
-      <td class="amount">${fmtAmt(r.amount)}</td>
-      <td class="tracking" style="color:#b45309; font-weight: 600;">${r.codes || '—'}</td>
-      <td style="font-size:.8rem;max-width:200px">${r.sender || r.desc || '—'}</td>
-      <td>${statusBadge}${matchDetails}</td>
-      <td style="font-size:.85rem;font-weight:600;color:var(--text);text-align:center">${excelRow}</td>
+      <td class="amount" style="font-weight:700">${fmtAmt(r.amount)}</td>
+      <td class="tracking" style="color:#b45309;font-weight:600">${Array.isArray(r.codes) ? r.codes.join(', ') : (r.codes || '—')}</td>
+      <td style="font-size:.78rem;max-width:180px;color:var(--text2)">
+        ${r.sender ? `<span style="color:var(--text);font-size:.8rem;display:block;font-weight:500">👤 ${r.sender}</span>` : ''}
+        <span style="color:var(--text2);font-size:.72rem">${(r.desc||'').replace(r.sender||'','').replace(/\|/g,' ').trim().slice(0,80)}</span>
+      </td>
+      <td style="min-width:130px">${statusBadge}${matchDetails}</td>
+      <td style="font-size:.82rem;font-weight:600;color:var(--text);text-align:center;white-space:nowrap">${excelRow}</td>
     `;
         tbody.appendChild(tr);
+      });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // SORT
+    // ══════════════════════════════════════════════════════════════════════════════
+    let currentSort = { key: null, asc: true };
+
+    function sortTable(key) {
+      if (currentSort.key === key) {
+        currentSort.asc = !currentSort.asc;
+      } else {
+        currentSort.key = key;
+        currentSort.asc = true;
+      }
+
+      // Update arrow indicators
+      document.querySelectorAll('.sort-arrow').forEach(s => s.textContent = '');
+      const arrow = document.getElementById('arr-' + key);
+      if (arrow) arrow.textContent = currentSort.asc ? ' ▲' : ' ▼';
+
+      const statusOrder = { exact: 0, review: 1, multiple: 2, duplicate: 3, notfound: 4 };
+
+      allResults.sort((a, b) => {
+        let va = a[key] ?? '';
+        let vb = b[key] ?? '';
+
+        if (key === 'amount' || key === 'bank_row') {
+          va = parseFloat(va) || 0;
+          vb = parseFloat(vb) || 0;
+          return currentSort.asc ? va - vb : vb - va;
+        }
+        if (key === 'status') {
+          va = statusOrder[va] ?? 99;
+          vb = statusOrder[vb] ?? 99;
+          return currentSort.asc ? va - vb : vb - va;
+        }
+        if (key === 'codes') {
+          va = Array.isArray(va) ? va.join(',') : String(va);
+          vb = Array.isArray(vb) ? vb.join(',') : String(vb);
+        }
+        va = String(va).toLowerCase();
+        vb = String(vb).toLowerCase();
+        return currentSort.asc ? va.localeCompare(vb, 'fa') : vb.localeCompare(va, 'fa');
+      });
+
+      // Keep current filter active
+      const activeFilterBtn = document.querySelector('.filter-tabs button.active');
+      const activeFilter = activeFilterBtn ? activeFilterBtn.getAttribute('onclick').match(/'([^']+)'/)[1] : 'all';
+      renderTable(allResults);
+      // Re-apply filter visually
+      document.querySelectorAll('#result-body tr').forEach(tr => {
+        tr.style.display = (activeFilter === 'all' || tr.dataset.status === activeFilter) ? '' : 'none';
       });
     }
 
@@ -1973,13 +2047,13 @@
     @media print{body{padding:0}}</style></head><body>
     <h2>گزارش تطبیق فیش‌های بانکی</h2>
     <p>تاریخ: ${new Date().toLocaleDateString('fa-IR')}</p>
-    <table><thead><tr><th>#</th><th>تاریخ</th><th>نوع</th><th>مبلغ</th><th>کد ۴ رقمی</th><th>نام</th><th>وضعیت</th><th>روش</th></tr></thead><tbody>
+    <table><thead><tr><th>#</th><th>تاریخ</th><th>نام مشتری</th><th>نوع</th><th>مبلغ</th><th>کد ۴ رقمی</th><th>شرح</th><th>وضعیت</th><th>روش</th></tr></thead><tbody>
     ${allResults.map((r, i) => {
         let stColor = r.status === 'exact' ? 'green' : r.status === 'review' ? 'orange' : r.status === 'multiple' ? 'hotpink' : r.status === 'duplicate' ? '#a16207' : 'red';
         let stText = r.status === 'exact' ? '✅ پیدا شد' : r.status === 'review' ? '⚠️ نیاز به بررسی' : r.status === 'multiple' ? '🌸 مشابه چندگانه' : r.status === 'duplicate' ? '⛔ حساب‌شده (تکراری)' : '❌ پیدا نشد';
-        return `<tr><td>${r.idx || i + 1}</td><td>${r.date || ''}</td><td>${r.doc_type || ''}</td>
+        return `<tr><td>${r.idx || i + 1}</td><td>${r.date || ''}</td><td>${r.sender || ''}</td><td>${r.doc_type || ''}</td>
     <td>${r.amount ? Number(r.amount).toLocaleString() : ''}</td>
-    <td>${r.codes || ''}</td><td>${r.sender || ''}</td>
+    <td>${r.codes || ''}</td><td>${r.desc || ''}</td>
     <td style="color:${stColor};font-weight:bold">${stText}</td>
     <td>${r.match_method || ''}</td></tr>`
       }).join('')}
@@ -1989,7 +2063,7 @@
     }
 
     function exportCSV() {
-      const hdr = ['ردیف', 'تاریخ', 'شماره سند', 'نوع', 'مبلغ', 'کد ۴ رقمی', 'نام/شرح', 'وضعیت', 'روش تطبیق', 'ردیف‌های پیدا شده'];
+      const hdr = ['ردیف', 'تاریخ', 'نام مشتری', 'شماره سند', 'نوع', 'مبلغ', 'کد ۴ رقمی', 'شرح', 'وضعیت', 'روش تطبیق', 'ردیف‌های پیدا شده'];
       const data = allResults.map((r, i) => {
         const stText = r.status === 'exact' ? 'پیدا شد' : r.status === 'review' ? 'نیاز به بررسی دستی (نام)' : r.status === 'multiple' ? 'مشابه چندگانه در اکسل' : r.status === 'duplicate' ? 'تکراری حساب شده در فایل اکسل' : 'پیدا نشد';
         let excelRowsCsv = '—';
@@ -2000,7 +2074,7 @@
         }
 
         return [
-          r.idx || i + 1, r.date || '', r.doc_num || '', r.doc_type || '', r.amount || '', r.codes || '', r.sender || '',
+          r.idx || i + 1, r.date || '', r.sender || '', r.doc_num || '', r.doc_type || '', r.amount || '', r.codes || '', r.desc || '',
           stText, r.match_method || '', excelRowsCsv
         ];
       });
