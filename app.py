@@ -412,15 +412,21 @@ def parse_html(html_bytes: bytes) -> list[dict]:
                 # This prevents account holder name / amounts from polluting the sender extraction.
                 excluded_cols = {i for i in [credit_idx, debit_idx, date_idx, account_name_idx, doc_num_idx] if i != -1}
                 
-                if desc_idx != -1 and len(tds) > desc_idx:
-                    desc_text = tds[desc_idx].get_text(strip=True)
+                if desc_indices:
+                    desc_parts = []
+                    for di in desc_indices:
+                        if di < len(tds):
+                            part = tds[di].get_text(separator=" ", strip=True).replace('ي', 'ی').replace('ك', 'ک')
+                            if part and part != "-":
+                                desc_parts.append(part)
+                    desc_text = " - ".join(desc_parts) if desc_parts else ""
                 else:
                     desc_parts_filtered = [tds[ci].get_text(strip=True) for ci in range(len(tds))
                                            if ci not in excluded_cols and tds[ci].get_text(strip=True)]
                     desc_text = " | ".join(desc_parts_filtered)
 
                 # Append tracking code column explicitly so Regex can find the 4-digit code
-                if tracking_idx != -1 and len(tds) > tracking_idx and tracking_idx not in (desc_idx,):
+                if tracking_idx != -1 and len(tds) > tracking_idx and tracking_idx not in desc_indices:
                     tk_text = tds[tracking_idx].get_text(strip=True)
                     if tk_text and tk_text != "-":
                         desc_text += f" - {tk_text}"
@@ -457,9 +463,7 @@ def parse_html(html_bytes: bytes) -> list[dict]:
                 
                 account_name = ""
                 if account_name_idx != -1 and len(tds) > account_name_idx:
-                    account_name = tds[account_name_idx].get_text(strip=True).replace('ي', 'ی').replace('ك', 'ک')
-                    # Clean up random prefixes like "13 " or "13-"
-                    account_name = _re.sub(r'^\d+[\s\-]+', '', account_name).strip()
+                    account_name = tds[account_name_idx].get_text(strip=True).replace('ي', 'ی').replace('ك', 'ک').strip()
                 
                 rows_out.append({
                     "page":          1,
@@ -1110,6 +1114,7 @@ def match_receipts(
             "amount":       int(amount) if amount else 0,
             "codes":        ", ".join(codes),
             "sender":       sender,
+            "customer_name": r.get("customer_name", ""),
             "desc":         r.get("desc", ""),
             "found":        matched is not None,
             "status":       status,
