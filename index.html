@@ -1017,7 +1017,10 @@
           <span id="ss-excel-name" style="font-size:0.9rem; color:var(--accent); font-weight:600;"></span>
           <span id="ss-bank-rows" style="font-size:0.78rem; color:var(--text2);"></span>
         </div>
-        <button onclick="clearExcelSession()" style="background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5; padding:6px 14px; border-radius:8px; cursor:pointer; font-size:0.8rem; font-weight:600; font-family:inherit;">🗑️ پاک کردن حافظه</button>
+        <div>
+          <button onclick="downloadSessionExcel()" style="background:#d1fae5; color:#065f46; border:1px solid #6ee7b7; padding:6px 14px; border-radius:8px; cursor:pointer; font-size:0.8rem; font-weight:600; font-family:inherit; margin-left:8px; transition:all 0.2s;" onmouseover="this.style.background='#a7f3d0'" onmouseout="this.style.background='#d1fae5'">📥 دانلود اکسل بررسی‌شده</button>
+          <button onclick="clearExcelSession()" style="background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5; padding:6px 14px; border-radius:8px; cursor:pointer; font-size:0.8rem; font-weight:600; font-family:inherit; transition:all 0.2s;" onmouseover="this.style.background='#fecaca'" onmouseout="this.style.background='#fee2e2'">🗑️ پاک کردن حافظه</button>
+        </div>
       </div>
       <div id="ss-html-files-section" style="display:none;">
         <div style="font-size:0.82rem; color:var(--text2); margin-bottom:8px;">📂 فایل‌های HTML که تاکنون با این اکسل بررسی شده‌اند:</div>
@@ -1303,6 +1306,13 @@
       document.getElementById('excel-upload-status').textContent = '';
       updateBtn();
     }
+
+    function downloadSessionExcel() {
+      // Just open the endpoint in a new tab, the browser will download it if it returns an attachment
+      window.open('/api/download-excel', '_blank');
+    }
+
+
 
     // ── Dual Mode ──────────────────────────────────────
     function switchMode(mode) {

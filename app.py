@@ -32,7 +32,7 @@ import ssl
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from fastapi import FastAPI, UploadFile, File, Form, Body, Request, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -1411,17 +1411,21 @@ async def analyze(
                     old_locks[t["row_num"]] = t["lock_text"]
 
         if all_matched_rows:
-            # 1. Read raw bytes with Pandas and convert to standard XLSX in memory
-            # (We do this because python excel styling libs struggle with old formatting bounds)
-            df = pd.read_excel(io.BytesIO(excel_bytes), header=None)
-            
-            # Write to a temporary bytes buffer as .xlsx
-            xlsx_buffer = io.BytesIO()
-            df.to_excel(xlsx_buffer, index=False, header=False)
-            xlsx_buffer.seek(0)
+            wb = None
+            try:
+                # Attempt to load directly with openpyxl (best for preserving formatting)
+                wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
+            except Exception as e:
+                logger.warning(f"Native openpyxl load failed ({e}), falling back to pandas conversion...")
+                # Fallback: Read raw bytes with Pandas and convert to standard XLSX in memory
+                # (Often needed for older .xls bounds or HTML tables disguised as excel)
+                df = pd.read_excel(io.BytesIO(excel_bytes), header=None)
+                xlsx_buffer = io.BytesIO()
+                with pd.ExcelWriter(xlsx_buffer, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False, header=False)
+                xlsx_buffer.seek(0)
+                wb = openpyxl.load_workbook(xlsx_buffer)
 
-            # 2. Open with openpyxl to apply colors
-            wb = openpyxl.load_workbook(xlsx_buffer)
             ws = wb.active
             ws.sheet_view.rightToLeft = True
             yellow_fill = PatternFill(start_color="FFFFFF00", end_color="FFFFFF00", fill_type="solid")
@@ -1452,21 +1456,12 @@ async def analyze(
                 for col in range(1, 16):
                     ws.cell(row=r_idx, column=col).fill = current_fill
 
-            # 3. Save finalized colored workbook back to disk, replacing original if possible
-            # Determine path (assuming script is running locally next to files)
-            original_filename = excel_filename
-                
-            # If the original was .xls, we save as .xlsx
-            base_name, _ = os.path.splitext(original_filename)
-            new_filename = f"{base_name}.xlsx"
+            # Save to memory instead of writing to a hardcoded Windows path
+            final_buffer = io.BytesIO()
+            wb.save(final_buffer)
+            sess["colored_bytes"] = final_buffer.getvalue()
             
-            # Since the user runs this locally on Windows, save it to the checkhesab directory
-            # Or ideally, same directory where they uploaded from if we knew it.
-            # Assuming D:/Checkhesab/ is the working directory based on context.
-            save_path = f"d:/Checkhesab/{new_filename}"
-            wb.save(save_path)
-            
-            logger.info(f"Generated locked Excel with {len(all_matched_rows)} rows highlighted at {save_path}.")
+            logger.info(f"Generated locked Excel with {len(all_matched_rows)} rows highlighted and saved to session memory.")
     except Exception as e:
         logger.error(f"Failed to generate locked excel: {e}")
 
@@ -1493,6 +1488,36 @@ async def analyze(
             "bank_txns_sample": bank_txns[:5],
         }
     })
+
+@app.get("/api/download-excel")
+async def download_session_excel(request: Request):
+    """Download the cumulative edited/colored bank Excel for the current session."""
+    check_auth(request)
+    session_id = _session_key(request)
+    if not session_id or session_id not in EXCEL_SESSIONS:
+        return JSONResponse({"ok": False, "detail": "اکسل در حافظه یافت نشد"})
+        
+    session_data = EXCEL_SESSIONS[session_id]
+    colored_bytes = session_data.get("colored_bytes")
+    # If not completely analyzed, or if it's there but blank
+    if not colored_bytes:
+        return JSONResponse({"ok": False, "detail": "اکسل هنوز رنگ‌آمیزی نشده (اول باید حداقل یک بار تطبیق انجام بشه)"})
+        
+    from pathlib import Path
+    import urllib.parse
+    
+    orig_name = session_data.get("filename", "bank_statement.xlsx")
+    base_name = Path(orig_name).stem
+    new_filename = f"{base_name} - فیش‌های بررسی شده.xlsx"
+    encoded_name = urllib.parse.quote(new_filename)
+    
+    return StreamingResponse(
+        io.BytesIO(colored_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}"
+        }
+    )
 
 @app.get("/health")
 async def health():
